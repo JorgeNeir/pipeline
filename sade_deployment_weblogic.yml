@@ -1,0 +1,400 @@
+name: Deploy artifacts to weblogic server trought runner
+
+on:
+  workflow_call:
+    inputs:
+      workdir:
+        description: 'The directory of the service'
+        required: false
+        default: './'
+        type: string
+      environment-run: 
+        description: 'Environment deploy'
+        required: true
+        type: string
+
+      artifact-path:
+        description: 'Path of the artifacts to be downloaded'
+        required: false
+        type: string
+
+      artifact-ear-name:
+        description: 'Path of the compiled application file'
+        required: false
+        type: string
+      artifact-sql-name:
+        description: 'Path of the sql script file'
+        required: false
+        type: string
+
+    secrets:
+      WEB_LOGIC_PASSWORD:
+        required: true
+      DB_POSTGRESQL_NAME:
+        required: true
+      DB_POSTGRESQL_USER:
+        required: true
+      DB_POSTGRESQL_PORT:
+        required: true
+      DB_POSTGRESQL_HOST:
+        required: true
+      DB_POSTGRESQL_PASS:
+        required: true
+      WEBLOGIC_HOST:
+        required: true
+      CLUSTER_TARGET:
+        required: true
+
+
+jobs:
+  stopAllMS:
+    runs-on: [ self-hosted, Linux, X64, aws, davi, runner ]
+    environment: ${{ inputs.environment-run }}
+    permissions:
+      id-token: write
+      contents: read
+    if: ${{ inputs.environment-run != 'production' }}
+    steps:
+      - name: 📥 Checkout code      
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Leyendo variables del archivo de propiedades
+        id: read-environment-variables
+        run: |
+          source deploy.properties
+          echo "execute_artifact_sql_name_file=${execute_artifact_sql_name_file}" >> $GITHUB_ENV
+          echo "execute_package_type_sql=${execute_package_type_sql}" >> $GITHUB_ENV
+          echo "execute_deploy_type_sql=${execute_deploy_type_sql}" >> $GITHUB_ENV
+
+      - name: list repository content
+        run: ls -R; ls -lh; pwd
+      
+      - name: 🚀 Stoping managed into remote server
+        run: |
+          echo "conection test stop"
+          export SSHPASS="${{ secrets.WEB_LOGIC_PASSWORD }}"
+          sshpass -e ssh weblogic@${{ secrets.WEBLOGIC_HOST }} "chmod -R 755 ~/scripts; mkdir -p ~/scripts/startStopAllMS"
+          sshpass -e scp -r startStopAllMS weblogic@${{ secrets.WEBLOGIC_HOST }}:~/scripts
+          sshpass -e ssh weblogic@${{ secrets.WEBLOGIC_HOST }} "pwd; ls -lh; cd ~/scripts/startStopAllMS/; ls -lh; chmod 755 ./stopAllMS.sh; ./stopAllMS.sh"
+  
+      - name: Sleep for 90 seconds
+        run: sleep 90s
+
+  update-database-sql:
+    runs-on: [ self-hosted, Linux, X64, aws, davi, runner ]
+    environment: ${{ inputs.environment-run }}
+    permissions:
+      id-token: write
+      contents: read
+    needs: stopAllMS
+    steps:
+      - name: 📥 Checkout code      
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Leyendo variables del archivo de propiedades
+        id: read-environment-variables
+        run: |
+          source deploy.properties
+          echo "execute_artifact_sql_name_file=${execute_artifact_sql_name_file}" >> $GITHUB_ENV
+          echo "execute_package_type_sql=${execute_package_type_sql}" >> $GITHUB_ENV
+          echo "execute_deploy_type_sql=${execute_deploy_type_sql}" >> $GITHUB_ENV
+
+      - name: print vars
+        if: ${{ env.execute_artifact_sql_name_file != '' }}
+        continue-on-error: true
+        run: echo "${{ env.execute_artifact_sql_name_file }}"
+
+      - name: Download artifact sql
+        if: ${{ inputs.artifact-sql-name && inputs.artifact-path && env.execute_artifact_sql_name_file != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact-sql-name }}
+
+      - name: list repository content
+        if: ${{ env.execute_artifact_sql_name_file != '' }}
+        run: ls -R -lh; pwd
+
+      - name: executing database script
+        if: ${{ env.execute_artifact_sql_name_file != '' }}
+        run: |
+          PGPASSWORD=${{ secrets.DB_POSTGRESQL_PASS }} psql -h ${{ secrets.DB_POSTGRESQL_HOST }} -p ${{ secrets.DB_POSTGRESQL_PORT }} -U ${{ secrets.DB_POSTGRESQL_USER }} -d ${{ secrets.DB_POSTGRESQL_NAME }} -f ${{ env.execute_artifact_sql_name_file }}
+
+  undeploy-deploy-weblogic:
+    runs-on: [ self-hosted, Linux, X64, aws, davi, runner ]
+    environment: ${{ inputs.environment-run }}
+    permissions:
+      id-token: write
+      contents: read
+    needs: update-database-sql
+    steps:
+      - name: 📥 Checkout code      
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Leyendo variables del archivo de propiedades
+        id: read-environment-variables
+        run: |
+          source deploy.properties
+          echo "undeploy_artifact_ear_name_file=${undeploy_artifact_ear_name_file}" >> $GITHUB_ENV
+          echo "deploy_artifact_ear_name_file=${deploy_artifact_ear_name_file}" >> $GITHUB_ENV
+          echo "deploy_package_type_ear=${deploy_package_type_ear}" >> $GITHUB_ENV
+          echo "deploy_deploy_type_ear=${deploy_deploy_type_ear}" >> $GITHUB_ENV
+
+      - name: print vars
+        if: ${{ env.deploy_artifact_ear_name_file != '' }}
+        run: echo "${{ env.deploy_artifact_ear_name_file }}"
+      
+      - name: Download artifact ear
+        if: ${{ inputs.artifact-ear-name && inputs.artifact-path && env.deploy_artifact_ear_name_file != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact-ear-name }}
+      
+      - name: Leer archivo de propiedades
+        if: ${{ env.deploy_artifact_ear_name_file != '' }}
+        id: read-properties
+        run: |
+          DEPLOY_EAR_FILE_NAME=$(basename "${{ env.deploy_artifact_ear_name_file }}" .ear)
+          UNDEPLOY_EAR_FILE_NAME=$(basename "${{ env.undeploy_artifact_ear_name_file }}" .ear)
+          sed -i "s#<<<DEPLOY_NOMBRE>>>#${{ env.deploy_artifact_ear_name_file }}#" deployment/deployment.properties
+          sed -i "s#<<<UNDEPLOY_NOMBRE>>>#${{ env.undeploy_artifact_ear_name_file }}#" deployment/deployment.properties
+          sed -i "s#<<<DEPLOY_NAME_CONSOLE>>>#${DEPLOY_EAR_FILE_NAME}#" deployment/deployment.properties
+          sed -i "s#<<<UNDEPLOY_NAME_CONSOLE>>>#${UNDEPLOY_EAR_FILE_NAME}#" deployment/deployment.properties
+          sed -i "s#<<<DEPLOY_CLUSTER_TARGET>>>#${{ secrets.CLUSTER_TARGET }}#" deployment/deployment.properties
+          sed -i "s#<<<UNDEPLOY_CLUSTER_TARGET>>>#${{ secrets.CLUSTER_TARGET }}#" deployment/deployment.properties
+          cat deployment/deployment.properties
+
+      - name: 🗑️ Undeploying aplication into remote server
+        if: ${{ env.deploy_artifact_ear_name_file != '' }}
+        run: |
+          echo "Undeploying aplication into remote server"
+          export SSHPASS="${{ secrets.WEB_LOGIC_PASSWORD }}"
+          sshpass -e ssh weblogic@${{ secrets.WEBLOGIC_HOST }} "chmod -R 755 ~/scripts; mkdir -p ~/scripts/deployment"
+          sshpass -e scp -r deployment weblogic@${{ secrets.WEBLOGIC_HOST }}:~/scripts
+          sshpass -e ssh weblogic@${{ secrets.WEBLOGIC_HOST }} "pwd; ls; cd ~/scripts/deployment/; chmod 755 ./scriptUnDeploy.sh; ./scriptUnDeploy.sh"
+      
+      - name: Sleep for 60 seconds
+        run: sleep 60s
+
+      - name: 🚀 Deploying aplication into remote server
+        if: ${{ env.deploy_artifact_ear_name_file != '' }}
+        run: |
+          echo "Deploying aplication into remote server"
+          export SSHPASS="${{ secrets.WEB_LOGIC_PASSWORD }}"
+          sshpass -e ssh weblogic@${{ secrets.WEBLOGIC_HOST }} "chmod -R 755 ~/scripts; mkdir -p ~/scripts/deployment"
+          sshpass -e scp -r deployment weblogic@${{ secrets.WEBLOGIC_HOST }}:~/scripts
+          sshpass -e scp -r ${{ env.deploy_artifact_ear_name_file }} weblogic@${{ secrets.WEBLOGIC_HOST }}:/u01/oracle/Domains/aserver/CO_DAV_SADE/servers/AdminServer/upload/
+          sshpass -e ssh weblogic@${{ secrets.WEBLOGIC_HOST }} "pwd; ls -lh; cd ~/scripts/deployment/; chmod 755 ./scriptDeploy.sh; ./scriptDeploy.sh"
+
+  startAllMS:
+    runs-on: [ self-hosted, Linux, X64, aws, davi, runner ]
+    environment: ${{ inputs.environment-run }}
+    permissions:
+      id-token: write
+      contents: read
+    needs: undeploy-deploy-weblogic
+    steps:
+      - name: 📥 Checkout code      
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+      - name: Leyendo variables del archivo de propiedades
+        id: read-environment-variables
+        run: |
+          source deploy.properties
+          echo "execute_artifact_sql_name_file=${execute_artifact_sql_name_file}" >> $GITHUB_ENV
+          echo "execute_package_type_sql=${execute_package_type_sql}" >> $GITHUB_ENV
+          echo "execute_deploy_type_sql=${execute_deploy_type_sql}" >> $GITHUB_ENV
+
+      - name: list repository content
+        run: ls -R; ls -lh; pwd
+
+      - name: 🚀 Starting managed into remote server
+        run: |
+          echo "conection test start"
+          export SSHPASS="${{ secrets.WEB_LOGIC_PASSWORD }}"
+          sshpass -e ssh weblogic@${{ secrets.WEBLOGIC_HOST }} "chmod -R 755 ~/scripts; mkdir -p ~/scripts/startStopAllMS"
+          sshpass -e scp -r startStopAllMS weblogic@${{ secrets.WEBLOGIC_HOST }}:~/scripts
+          sshpass -e ssh weblogic@${{ secrets.WEBLOGIC_HOST }} "pwd; ls -lh; cd ~/scripts/startStopAllMS/; chmod 755 ./startAllMS.sh; ./startAllMS.sh"
+        
+
+  stopAllMS-prod:
+    runs-on: [ self-hosted, Linux, X64, prod, aws ]
+    environment: ${{ inputs.environment-run }}
+    permissions:
+      id-token: write
+      contents: read
+    if: ${{ inputs.environment-run == 'production' }}
+    steps:
+      - name: 📥 Checkout code      
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Leyendo variables del archivo de propiedades
+        id: read-environment-variables
+        run: |
+          source deploy.properties
+          echo "execute_artifact_sql_name_file=${execute_artifact_sql_name_file}" >> $GITHUB_ENV
+          echo "execute_package_type_sql=${execute_package_type_sql}" >> $GITHUB_ENV
+          echo "execute_deploy_type_sql=${execute_deploy_type_sql}" >> $GITHUB_ENV
+
+      - name: list repository content
+        run: ls -R; ls -lh; pwd
+      
+      - name: 🚀 Stoping managed into remote server
+        run: |
+          echo "conection test stop"
+          export SSHPASS="${{ secrets.WEB_LOGIC_PASSWORD }}"
+          sshpass -e ssh weblogic@${{ secrets.WEBLOGIC_HOST }} "chmod -R 755 ~/scripts; mkdir -p ~/scripts/startStopAllMS"
+          sshpass -e scp -r startStopAllMS weblogic@${{ secrets.WEBLOGIC_HOST }}:~/scripts
+          sshpass -e ssh weblogic@${{ secrets.WEBLOGIC_HOST }} "pwd; ls -lh; cd ~/scripts/startStopAllMS/; ls -lh; chmod 755 ./stopAllMS.sh; ./stopAllMS.sh"
+  
+      - name: Sleep for 190 seconds
+        run: sleep 90s
+
+  update-database-sql-prod:
+    runs-on: [ self-hosted, Linux, X64, prod, aws ]
+    environment: ${{ inputs.environment-run }}
+    permissions:
+      id-token: write
+      contents: read
+    needs: stopAllMS-prod
+    steps:
+      - name: 📥 Checkout code      
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Leyendo variables del archivo de propiedades
+        id: read-environment-variables
+        run: |
+          source deploy.properties
+          echo "execute_artifact_sql_name_file=${execute_artifact_sql_name_file}" >> $GITHUB_ENV
+          echo "execute_package_type_sql=${execute_package_type_sql}" >> $GITHUB_ENV
+          echo "execute_deploy_type_sql=${execute_deploy_type_sql}" >> $GITHUB_ENV
+
+      - name: print vars
+        if: ${{ env.execute_artifact_sql_name_file != '' }}
+        continue-on-error: true
+        run: echo "${{ env.execute_artifact_sql_name_file }}"
+
+      - name: Download artifact sql
+        if: ${{ inputs.artifact-sql-name && inputs.artifact-path && env.execute_artifact_sql_name_file != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact-sql-name }}
+
+      - name: list repository content
+        if: ${{ env.execute_artifact_sql_name_file != '' }}
+        run: ls -R -lh; pwd
+
+      - name: executing database script
+        if: ${{ env.execute_artifact_sql_name_file != '' }}
+        run: |
+          PGPASSWORD=${{ secrets.DB_POSTGRESQL_PASS }} psql -h ${{ secrets.DB_POSTGRESQL_HOST }} -p ${{ secrets.DB_POSTGRESQL_PORT }} -U ${{ secrets.DB_POSTGRESQL_USER }} -d ${{ secrets.DB_POSTGRESQL_NAME }} -f ${{ env.execute_artifact_sql_name_file }}
+  
+  undeploy-deploy-weblogic-prod:
+    runs-on: [ self-hosted, Linux, X64, prod, aws ]
+    environment: ${{ inputs.environment-run }}
+    permissions:
+      id-token: write
+      contents: read
+    needs: update-database-sql-prod
+    steps:
+      - name: 📥 Checkout code      
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Leyendo variables del archivo de propiedades
+        id: read-environment-variables
+        run: |
+          source deploy.properties
+          echo "undeploy_artifact_ear_name_file=${undeploy_artifact_ear_name_file}" >> $GITHUB_ENV
+          echo "deploy_artifact_ear_name_file=${deploy_artifact_ear_name_file}" >> $GITHUB_ENV
+          echo "deploy_package_type_ear=${deploy_package_type_ear}" >> $GITHUB_ENV
+          echo "deploy_deploy_type_ear=${deploy_deploy_type_ear}" >> $GITHUB_ENV
+
+      - name: print vars
+        if: ${{ env.deploy_artifact_ear_name_file != '' }}
+        run: echo "${{ env.deploy_artifact_ear_name_file }}"
+      
+      - name: Download artifact ear
+        if: ${{ inputs.artifact-ear-name && inputs.artifact-path && env.deploy_artifact_ear_name_file != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact-ear-name }}
+      
+      - name: Leer archivo de propiedades
+        if: ${{ env.deploy_artifact_ear_name_file != '' }}
+        id: read-properties
+        run: |
+          DEPLOY_EAR_FILE_NAME=$(basename "${{ env.deploy_artifact_ear_name_file }}" .ear)
+          UNDEPLOY_EAR_FILE_NAME=$(basename "${{ env.undeploy_artifact_ear_name_file }}" .ear)
+          sed -i "s#<<<DEPLOY_NOMBRE>>>#${{ env.deploy_artifact_ear_name_file }}#" deployment/deployment.properties
+          sed -i "s#<<<UNDEPLOY_NOMBRE>>>#${{ env.undeploy_artifact_ear_name_file }}#" deployment/deployment.properties
+          sed -i "s#<<<DEPLOY_NAME_CONSOLE>>>#${DEPLOY_EAR_FILE_NAME}#" deployment/deployment.properties
+          sed -i "s#<<<UNDEPLOY_NAME_CONSOLE>>>#${UNDEPLOY_EAR_FILE_NAME}#" deployment/deployment.properties
+          sed -i "s#<<<DEPLOY_CLUSTER_TARGET>>>#${{ secrets.CLUSTER_TARGET }}#" deployment/deployment.properties
+          sed -i "s#<<<UNDEPLOY_CLUSTER_TARGET>>>#${{ secrets.CLUSTER_TARGET }}#" deployment/deployment.properties
+          cat deployment/deployment.properties
+
+      - name: 🗑️ Undeploying aplication into remote server
+        if: ${{ env.deploy_artifact_ear_name_file != '' }}
+        run: |
+          echo "Undeploying aplication into remote server"
+          export SSHPASS="${{ secrets.WEB_LOGIC_PASSWORD }}"
+          sshpass -e ssh weblogic@${{ secrets.WEBLOGIC_HOST }} "chmod -R 755 ~/scripts; mkdir -p ~/scripts/deployment"
+          sshpass -e scp -r deployment weblogic@${{ secrets.WEBLOGIC_HOST }}:~/scripts
+          sshpass -e ssh weblogic@${{ secrets.WEBLOGIC_HOST }} "pwd; ls; cd ~/scripts/deployment/; chmod 755 ./scriptUnDeploy.sh; ./scriptUnDeploy.sh"
+      
+      - name: Sleep for 60 seconds
+        run: sleep 60s
+
+      - name: 🚀 Deploying aplication into remote server
+        if: ${{ env.deploy_artifact_ear_name_file != '' }}
+        run: |
+          echo "Deploying aplication into remote server"
+          export SSHPASS="${{ secrets.WEB_LOGIC_PASSWORD }}"
+          sshpass -e ssh weblogic@${{ secrets.WEBLOGIC_HOST }} "chmod -R 755 ~/scripts; mkdir -p ~/scripts/deployment"
+          sshpass -e scp -r deployment weblogic@${{ secrets.WEBLOGIC_HOST }}:~/scripts
+          sshpass -e scp -r ${{ env.deploy_artifact_ear_name_file }} weblogic@${{ secrets.WEBLOGIC_HOST }}:/u01/oracle/Domains/aserver/CO_DAV_SADE/servers/AdminServer/upload/
+          sshpass -e ssh weblogic@${{ secrets.WEBLOGIC_HOST }} "pwd; ls -lh; cd ~/scripts/deployment/; chmod 755 ./scriptDeploy.sh; ./scriptDeploy.sh"
+
+  startAllMS-prod:
+    runs-on: [ self-hosted, Linux, X64, prod, aws ]
+    environment: ${{ inputs.environment-run }}
+    permissions:
+      id-token: write
+      contents: read
+    needs: undeploy-deploy-weblogic-prod
+    steps:
+      - name: 📥 Checkout code      
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+      - name: Leyendo variables del archivo de propiedades
+        id: read-environment-variables
+        run: |
+          source deploy.properties
+          echo "execute_artifact_sql_name_file=${execute_artifact_sql_name_file}" >> $GITHUB_ENV
+          echo "execute_package_type_sql=${execute_package_type_sql}" >> $GITHUB_ENV
+          echo "execute_deploy_type_sql=${execute_deploy_type_sql}" >> $GITHUB_ENV
+
+      - name: list repository content
+        run: ls -R; ls -lh; pwd
+
+      - name: 🚀 Starting managed into remote server
+        run: |
+          echo "conection test start"
+          export SSHPASS="${{ secrets.WEB_LOGIC_PASSWORD }}"
+          sshpass -e ssh weblogic@${{ secrets.WEBLOGIC_HOST }} "chmod -R 755 ~/scripts; mkdir -p ~/scripts/startStopAllMS"
+          sshpass -e scp -r startStopAllMS weblogic@${{ secrets.WEBLOGIC_HOST }}:~/scripts
+          sshpass -e ssh weblogic@${{ secrets.WEBLOGIC_HOST }} "pwd; ls -lh; cd ~/scripts/startStopAllMS/; chmod 755 ./startAllMS.sh; ./startAllMS.sh"
+ 

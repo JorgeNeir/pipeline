@@ -1,0 +1,105 @@
+
+name: Deploy Artifacts to web logic - Laboratory
+on:
+  push:
+    branches: [ laboratory ]
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  EAR_ARTIFACT_NAME: artifact-ear
+  SQL_ARTIFACT_NAME: artifac-sql
+  ARTIFACT_PATH: /home/runner/work/davi-sade-deploy-artifacts-pipeline/davi-sade-deploy-artifacts-pipeline/
+  undeploy_artifact_ear_name_file: ''
+  deploy_artifact_ear_name_file: ''
+  deploy_package_type_ear: ''
+  deploy_deploy_type_ear: ''
+  execute_artifact_sql_name_file: ''
+  execute_package_type_sql: ''
+  execute_deploy_type_sql: ''
+
+jobs:
+  retrieve-artifact:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: './'
+    environment: laboratory
+    steps:
+      - name: ⬇️ Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Leyendo variables del archivo de propiedades
+        id: read-environment-variables
+        run: |
+          source deploy.properties
+          echo "undeploy_artifact_ear_name_file2=${undeploy_artifact_ear_name_file}" >> $GITHUB_ENV
+          echo "deploy_artifact_ear_name_file2=${deploy_artifact_ear_name_file}" >> $GITHUB_ENV
+          echo "deploy_package_type_ear2=${deploy_package_type_ear}" >> $GITHUB_ENV
+          echo "deploy_deploy_type_ear2=${deploy_deploy_type_ear}" >> $GITHUB_ENV
+          echo "execute_artifact_sql_name_file1=${execute_artifact_sql_name_file}" >> $GITHUB_ENV
+          echo "execute_package_type_sql1=${execute_package_type_sql}" >> $GITHUB_ENV
+          echo "execute_deploy_type_sql1=${execute_deploy_type_sql}" >> $GITHUB_ENV
+
+      - name: ⬇️ Checkout Retrive Action
+        uses: actions/checkout@v3
+        with:
+          repository: davivienda-colombia/davi-coe-action-jfrog-pipeline
+          ref: 'v1.12.0'
+          token: ${{ secrets.TOKEN_GITHUB }}
+          persist-credentials: false
+          path: ./.github/actions/davi-coe-action-jfrog-pipeline
+
+      - name: 📥 download artifacts from jfrog
+        id: download-artifact
+        uses: ./.github/actions/davi-coe-action-jfrog-pipeline/retrieve-artifact
+        if: ${{ env.deploy_artifact_ear_name_file2 != '' }}
+        with:
+          artifactory-reader-user: ${{ secrets.ARTIFACTORY_READER_USER }}
+          artifactory-reader-password: ${{ secrets.ARTIFACTORY_READER_PASSWORD }}
+          package-type: ${{ env.deploy_package_type_ear2 }}
+          artifact-url: "https://davicienda.jfrog.io/artifactory/davi-sade-${{ env.deploy_deploy_type_ear2 }}-package/${{ env.deploy_artifact_ear_name_file2 }}"
+
+      - name: 📥 download artifact SQL from jfrog
+        id: download-sql-artifact 
+        uses: ./.github/actions/davi-coe-action-jfrog-pipeline/retrieve-artifact
+        if: ${{ env.execute_artifact_sql_name_file1 != '' }}
+        with:
+          artifactory-reader-user: ${{ secrets.ARTIFACTORY_READER_USER }}
+          artifactory-reader-password: ${{ secrets.ARTIFACTORY_READER_PASSWORD }}
+          package-type: ${{ env.execute_package_type_sql1 }}
+          artifact-url: "https://davicienda.jfrog.io/artifactory/davi-sade-${{ env.execute_deploy_type_sql1 }}-package/${{ env.execute_artifact_sql_name_file1 }}"
+   
+      - name: 🚀📤 Upload EAR artifact 
+        uses: actions/upload-artifact@v4
+        if: ${{ env.deploy_artifact_ear_name_file2 != '' }}
+        with:
+          name: ${{ env.EAR_ARTIFACT_NAME }}
+          path: "${{ env.ARTIFACT_PATH }}${{ env.deploy_artifact_ear_name_file2 }}"
+          retention-days: 1
+
+      - name: 🚀📤 Upload SQL artifact 
+        uses: actions/upload-artifact@v4
+        if: ${{ env.execute_artifact_sql_name_file1 != '' }}
+        with:
+          name: ${{ env.SQL_ARTIFACT_NAME }}
+          path: "${{ env.ARTIFACT_PATH }}${{ env.execute_artifact_sql_name_file1 }}"
+          retention-days: 1
+
+      - name: List files
+        run: ls -R -lh
+
+  deployment:
+    name: 🛠️ Deployment of Laboratory
+    needs: retrieve-artifact
+    uses: davivienda-colombia/davi-coe-non-reusable-pipeline/.github/workflows/sade_deployment_weblogic.yml@main
+    with:
+      environment-run: laboratory
+      artifact-ear-name: artifact-ear
+      artifact-sql-name: artifac-sql
+      artifact-path: "/home/runner/work/davi-sade-deploy-artifacts-pipeline/davi-sade-deploy-artifacts-pipeline/"
+    secrets: inherit

@@ -1,0 +1,25 @@
+Connecting to t3s://consolasade.aws.des.davivienda.loc:9002 with userid sade-devops ...
+Successfully connected to Admin Server "AdminServer" that belongs to domain "CO_DAV_SADE".
+Location changed to edit tree. 	 
+This is a writable tree with DomainMBean as the root. 	 
+To make changes you will need to start an edit session via startEdit(). 
+For more help, use help('edit').
+
+Starting an edit session ...
+Started edit session, be sure to save and activate your changes once you are done.
+Deploying application from /u01/oracle/Domains/aserver/CO_DAV_SADE/servers/AdminServer/upload/c4u_version5.2.62.ear to targets WLS_SADE01 (upload=false) ...
+You have an edit session in progress, hence WLST will not block for your deployment to complete.
+Started the Deployment of Application. Please refer to the returned WLSTProgress object or variable LAST to track the status.
+Saving all your changes ...
+Saved all your changes successfully.
+Activating all your changes, this may take a while ... 
+The edit lock associated with this edit session is released once the activation is completed.
+Activation completed
+Starting application c4u_version5.2.62.
+Completed the start of Application with status completed
+Current Status of your Deployment:
+Deployment command type: start
+Deployment State : completed
+Deployment Message : no message
+Disconnected from weblogic server: AdminServer
+WLST output will no longer be redirected to /home/weblogic/script_deploy/scriptDeploy.log.

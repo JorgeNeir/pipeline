@@ -1,0 +1,20 @@
+Connecting to t3s://consolasade.aws.des.davivienda.loc:9002 with userid sade-devops ...
+Successfully connected to Admin Server "AdminServer" that belongs to domain "CO_DAV_SADE".
+Cannot redirect output to /home/weblogic/script_undeploy/scriptUnDeploy.log. 
+WLST is already redirecting output to another file /home/weblogic/script_undeploy/scriptUnDeploy.log.
+Location changed to edit tree. 	 
+This is a writable tree with DomainMBean as the root. 	 
+To make changes you will need to start an edit session via startEdit(). 
+For more help, use help('edit').
+
+Starting an edit session ...
+Started edit session, be sure to save and activate your changes once you are done.
+Undeploying application c4u_version5.2.62 ...
+You have an edit session in progress, hence WLST will not block for your undeployment to complete.
+Started the undeployment of Application. Please refer to the returned WLSTProgress object or variable LAST to track the status.
+Saving all your changes ...
+Saved all your changes successfully.
+Activating all your changes, this may take a while ... 
+The edit lock associated with this edit session is released once the activation is completed.
+Activation completed
+WLST output will no longer be redirected to /home/weblogic/script_undeploy/scriptUnDeploy.log.
