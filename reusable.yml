@@ -1,0 +1,109 @@
+name: Reusable WebLogic Remote Deployment via SSH
+
+on:
+  workflow_call:
+    inputs:
+      # Conexión SSH al servidor WebLogic (Azure VM)
+      ssh_host:
+        description: 'Hostname o IP del servidor WebLogic (Azure VM)'
+        required: true
+        type: string
+      ssh_username:
+        description: 'Usuario SSH para conectar al servidor WebLogic'
+        required: true
+        type: string
+
+      # Detalles de WebLogic
+      weblogic_admin_url:
+        description: 'URL del servidor Admin de WebLogic (e.g., t3://host:port)'
+        required: true
+        type: string
+      weblogic_username:
+        description: 'Usuario para la conexión a WebLogic'
+        required: true
+        type: string
+      weblogic_targets:
+        description: 'Destinos de despliegue en WebLogic (e.g., CLUSTER_HWEC-D)'
+        required: true
+        type: string
+      application_name_in_weblogic: # Nombre usado en -name para deploy/undeploy
+        description: 'Nombre de la aplicación en WebLogic (e.g., ExpertoContable_v1.0)'
+        required: true
+        type: string
+      artifact_filename_on_server: # Nombre del archivo .ear en el servidor
+        description: 'Nombre del archivo .ear en el servidor (e.g., ExpertoContable_v1.0.ear)'
+        required: true
+        type: string
+      weblogic_home_lib_path:
+        description: 'Ruta al directorio lib de WebLogic server (e.g., /u01/WLS14.1.1/middleware/wlserver/server/lib)'
+        required: true
+        type: string
+      artifact_source_directory_on_server:
+        description: 'Directorio en el servidor donde se encuentra el artefacto (e.g., /u01/WLS14.1.1/middleware/domains/instaladores)'
+        required: true
+        type: string
+      skip_undeploy:
+        description: 'Omitir el paso de undeploy si es true'
+        required: false
+        type: boolean
+        default: false
+      java_path:
+        description: 'Ruta al ejecutable de Java (si no está en el PATH del servidor remoto)'
+        required: false
+        type: string
+        default: 'java'
+    secrets:
+      SSH_PRIVATE_KEY:
+        description: 'Clave privada SSH para conectar al servidor WebLogic'
+        required: true
+      WEBLOGIC_PASSWORD:
+        description: 'Contraseña para el usuario de WebLogic'
+        required: true
+
+jobs:
+  execute-weblogic-deployment:
+    runs-on: ubuntu-latest # Este runner solo orquesta la conexión SSH
+    steps:
+      - name: Display Inputs (for debugging - remove in production)
+        run: |
+          echo "SSH Host: ${{ inputs.ssh_host }}"
+          echo "WebLogic Admin URL: ${{ inputs.weblogic_admin_url }}"
+          echo "Application Name in WebLogic: ${{ inputs.application_name_in_weblogic }}"
+          echo "Artifact Filename on Server: ${{ inputs.artifact_filename_on_server }}"
+          # ... otros inputs ...
+
+      - name: Prepare Deployment Script
+        id: deploy_script
+        run: |
+          UNDEPLOY_COMMAND=""
+          if [ "${{ inputs.skip_undeploy }}" == "false" ]; then
+            UNDEPLOY_COMMAND="${{ inputs.java_path }} -cp ${{ inputs.weblogic_home_lib_path }}/weblogic.jar weblogic.Deployer \
+              -adminurl ${{ inputs.weblogic_admin_url }} \
+              -username ${{ inputs.weblogic_username }} \
+              -password '${{ secrets.WEBLOGIC_PASSWORD }}' \
+              -undeploy \
+              -name ${{ inputs.application_name_in_weblogic }} \
+              -targets ${{ inputs.weblogic_targets }};"
+          fi
+
+          DEPLOY_COMMAND="${{ inputs.java_path }} -cp ${{ inputs.weblogic_home_lib_path }}/weblogic.jar weblogic.Deployer \
+            -adminurl ${{ inputs.weblogic_admin_url }} \
+            -username ${{ inputs.weblogic_username }} \
+            -password '${{ secrets.WEBLOGIC_PASSWORD }}' \
+            -deploy \
+            -name ${{ inputs.application_name_in_weblogic }} \
+            -source ${{ inputs.artifact_source_directory_on_server }}/${{ inputs.artifact_filename_on_server }} \
+            -targets ${{ inputs.weblogic_targets }} \
+            -upload;"
+
+          # Convertir a una sola línea para el script SSH
+          SCRIPT_CONTENT="${UNDEPLOY_COMMAND} ${DEPLOY_COMMAND} echo 'Despliegue completado para ${{ inputs.application_name_in_weblogic }}. Recuerda los pasos post-instalación si son necesarios (reinicio de manejados, limpieza de caché).'"
+          echo "::set-output name=script::$(echo $SCRIPT_CONTENT | sed "s/'/\\\'/g")" # Escapar comillas simples para el script
+
+      - name: Execute Undeploy and Deploy on WebLogic Server via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ inputs.ssh_host }}
+          username: ${{ inputs.ssh_username }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: ${{ steps.deploy_script.outputs.script }}

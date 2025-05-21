@@ -1,0 +1,95 @@
+name: Deploy ExpertoContable to WebLogic (from JFrog to Azure)
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_version:
+        description: 'Versión del artefacto en JFrog (e.g., v3.4). Usado para nombre y descarga.'
+        required: true
+        default: 'v0.0.0'
+      environment:
+        description: 'Entorno de despliegue (desarrollo, laboratorio, produccion)'
+        required: true
+        default: 'desarrollo'
+        type: choice
+        options:
+          - desarrollo
+          - laboratorio
+          - produccion
+
+# Variables de entorno globales para JFrog (pueden ser también inputs o secrets)
+env:
+  JFROG_SERVER_URL: 'https://tu-servidor.jfrog.io/artifactory' # Cambia esto
+  JFROG_REPO_KEY: 'tu-repositorio-generic-local' # Cambia esto: ej. generic-local, libs-release-local
+  ARTIFACT_GROUP_PATH: 'com/tuempresa/expertocontable' # Cambia esto: ruta dentro del repo
+
+jobs:
+  prepare_artifact:
+    name: Download Artifact from JFrog & Copy to Server
+    runs-on: ubuntu-latest # Este runner necesita acceso a JFrog y capacidad de SSH/SCP
+    outputs:
+      artifact_name_on_server: ExpertoContable_${{ github.event.inputs.artifact_version }}.ear
+      application_name_for_weblogic: ExpertoContable_${{ github.event.inputs.artifact_version }}
+    env:
+      # Mapeo de variables de entorno para SSH (ajusta según tu configuración de Azure VM)
+      SSH_HOST_VAR: ${{ (github.event.inputs.environment == 'desarrollo' && secrets.AZURE_VM_IP_DESARROLLO) || (github.event.inputs.environment == 'laboratorio' && secrets.AZURE_VM_IP_LABORATORIO) || secrets.AZURE_VM_IP_PRODUCCION }}
+      SSH_USER_VAR: ${{ secrets.AZURE_VM_SSH_USER }} # Asume el mismo user para todos los envs, o mapea
+    steps:
+      - name: Define Artifact Names
+        id: names
+        run: |
+          ARTIFACT_FILE="ExpertoContable_${{ github.event.inputs.artifact_version }}.ear"
+          echo "ARTIFACT_FILENAME_WITH_EXT=$ARTIFACT_FILE" >> $GITHUB_ENV
+          echo "::set-output name=artifact_filename_with_ext::$ARTIFACT_FILE"
+
+          APP_NAME="ExpertoContable_${{ github.event.inputs.artifact_version }}"
+          echo "APP_NAME_WEBLOGIC=$APP_NAME" >> $GITHUB_ENV
+          echo "::set-output name=app_name_weblogic::$APP_NAME"
+
+
+      - name: Download Artifact from JFrog
+        run: |
+          # Ejemplo usando curl. Puedes usar JFrog CLI si está configurado en el runner.
+          # Necesitarás JFROG_USER y JFROG_PASSWORD/API_KEY como secrets.
+          ARTIFACT_URL="${{ env.JFROG_SERVER_URL }}/${{ env.JFROG_REPO_KEY }}/${{ env.ARTIFACT_GROUP_PATH }}/${{ github.event.inputs.artifact_version }}/${{ env.ARTIFACT_FILENAME_WITH_EXT }}"
+          echo "Downloading from: $ARTIFACT_URL"
+          curl -u "${{ secrets.JFROG_USER }}:${{ secrets.JFROG_PASSWORD }}" -L -o "${{ env.ARTIFACT_FILENAME_WITH_EXT }}" "$ARTIFACT_URL"
+          
+          # Verificar que el archivo se descargó
+          if [ ! -f "${{ env.ARTIFACT_FILENAME_WITH_EXT }}" ]; then
+            echo "Error: Artifact download failed."
+            exit 1
+          fi
+          ls -l "${{ env.ARTIFACT_FILENAME_WITH_EXT }}"
+
+      - name: Copy Artifact to WebLogic Server (Azure VM)
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ env.SSH_HOST_VAR }}
+          username: ${{ env.SSH_USER_VAR }}
+          key: ${{ secrets.AZURE_VM_SSH_PRIVATE_KEY }} # Secret con la clave privada para la VM
+          source: "${{ env.ARTIFACT_FILENAME_WITH_EXT }}"
+          target: "/u01/WLS14.1.1/middleware/domains/instaladores/" # Ruta destino del documento
+
+  deploy_experto_contable:
+    name: Deploy to WebLogic
+    needs: prepare_artifact
+    uses: ./.github/workflows/weblogic-deploy-reusable.yml
+    with:
+      # Conexión SSH (Azure VM)
+      ssh_host: ${{ (github.event.inputs.environment == 'desarrollo' && secrets.AZURE_VM_IP_DESARROLLO) || (github.event.inputs.environment == 'laboratorio' && secrets.AZURE_VM_IP_LABORATORIO) || secrets.AZURE_VM_IP_PRODUCCION }}
+      ssh_username: ${{ secrets.AZURE_VM_SSH_USER }}
+
+      # Detalles de WebLogic
+      weblogic_admin_url: ${{ (github.event.inputs.environment == 'desarrollo' && 't3://10.229.165.5:7001') || (github.event.inputs.environment == 'laboratorio' && 't3://TU_LAB_HOST:7001') || 't3://TU_PROD_HOST:7001' }}
+      weblogic_username: 'weblogicdeploy'
+      weblogic_targets: ${{ (github.event.inputs.environment == 'desarrollo' && 'CLUSTER_HWEC-D') || (github.event.inputs.environment == 'laboratorio' && 'CLUSTER_HWEC-L') || 'CLUSTER_HWEC-P' }}
+      application_name_in_weblogic: ${{ needs.prepare_artifact.outputs.application_name_for_weblogic }}
+      artifact_filename_on_server: ${{ needs.prepare_artifact.outputs.artifact_name_on_server }}
+      weblogic_home_lib_path: '/u01/WLS14.1.1/middleware/wlserver/server/lib/'
+      artifact_source_directory_on_server: '/u01/WLS14.1.1/middleware/domains/instaladores'
+      # skip_undeploy: false # (opcional)
+      # java_path: 'java' # (opcional)
+    secrets:
+      SSH_PRIVATE_KEY: ${{ secrets.AZURE_VM_SSH_PRIVATE_KEY }}
+      WEBLOGIC_PASSWORD: ${{ (github.event.inputs.environment == 'desarrollo' && secrets.WEBLOGIC_PASSWORD_DESARROLLO) || (github.event.inputs.environment == 'laboratorio' && secrets.WEBLOGIC_PASSWORD_LABORATORIO) || secrets.WEBLOGIC_PASSWORD_PRODUCCION }}
