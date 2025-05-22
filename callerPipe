@@ -1,0 +1,25 @@
+name: Deploy App to Azure Container App
+
+on:
+  push:
+    branches:
+      - main
+  # workflow_dispatch:
+
+jobs:
+  call-reusable-workflow:
+    uses: ORG_O_USUARIO/REPO_DE_WORKFLOWS_REUTILIZABLES/.github/workflows/reusable-deploy-container-app.yml@main # ¡Asegúrate que esta ruta sea correcta!
+    with:
+      image_name: 'mi-aplicacion-especifica'
+      container_app_name: 'nombre-de-mi-container-app'
+      resource_group_name: 'mi-grupo-de-recursos-azure'
+      acr_name: 'nombredecontainerregistry'
+       dockerfile_path: './deploy/Dockerfile' # Opcional
+       image_tag: 'v1.2.3' # Opcional
+
+      environment_yaml_path: 'container-app-environment.yaml'
+
+    secrets:
+      AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS_PROD }}
+      ACR_USERNAME: ${{ secrets.ACR_USERNAME_PROD }}
+      ACR_PASSWORD: ${{ secrets.ACR_PASSWORD_PROD }}
