@@ -1,0 +1,28 @@
+1. Disparador (Push/Manual)
+     |
+     v
+2. Pipeline Orquestador (main-ci-cd-orchestrator.yml)
+     |
+     |--- Llama a --> 3. Pipeline de CI (deploy-container-app.yml - el de tu colega)
+     |                   |   - Compila código Java
+     |                   |   - Obtiene versión del pom.xml
+     |                   |   - Crea un archivo .zip (ej. PR-123.zip) conteniendo el .ear
+     |                   |   - Sube el .zip a JFrog Artifactory
+     |                   |   - (Importante) Genera Salidas: nombre del .zip, ruta en JFrog, nombre original del .ear
+     |
+     |--- Job: Mapeo de Entradas CI a CD (map_ci_to_cd_inputs)
+     |                   |   - Traduce el entorno (ej. "integration" de CI a "desarrollo" para CD)
+     |                   |   - Pasa los nombres de artefactos de CI a CD
+     |
+     |--- Llama a --> 4. Pipeline "Llamador" de CD (deploy-experto-contable-cd.yml)
+                         |   - Recibe información del artefacto en JFrog del orquestador
+                         |   - Descarga el .zip desde JFrog
+                         |   - Extrae el archivo .ear del .zip
+                         |   - Deriva el nombre de la aplicación para WebLogic (ej. ExpertoContable_v3.4)
+                         |   - Copia el .ear al servidor WebLogic (Azure VM) vía SCP
+                         |
+                         |--- Llama a --> 5. Pipeline Reutilizable de Despliegue WebLogic (weblogic-deploy-reusable.yml)
+                                             |   - Se conecta al servidor WebLogic (Azure VM) vía SSH
+                                             |   - Ejecuta `weblogic.Deployer -undeploy` (si aplica)
+                                             |   - Ejecuta `weblogic.Deployer -deploy` con el .ear
+                                             |   - Reporta el estado
