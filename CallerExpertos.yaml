@@ -1,0 +1,96 @@
+name: Pipeline CI/CD Principal para ExpertoContable
+
+on:
+  push:
+    branches:
+      - main # O tu rama de disparo para CI/CD. Ejemplo: develop, release/*
+  workflow_dispatch: # Permite disparo manual
+    inputs:
+      environment_ci_target: # Nombre del entorno para CI (ej. integration, laboratory, production)
+        description: 'Entorno destino para CI (usado por el workflow de compilación)'
+        required: true
+        default: 'integration' # Elige un valor por defecto apropiado
+        type: string
+      # pom_version_file_path: # Descomentar si necesitas que sea una entrada
+      #   description: 'Ruta al archivo pom.xml principal para obtener la versión'
+      #   required: false
+      #   default: 'pom.xml'
+      #   type: string
+      # build_command_for_ci: # Descomentar si necesitas que sea una entrada
+      #   description: 'Comando de compilación para Maven'
+      #   required: false
+      #   default: 'mvn clean package -DskipTests'
+      #   type: string
+
+jobs:
+  #============================================================================
+  # JOB 1: EJECUTAR EL PIPELINE DE CI (Compilación y subida a JFrog)
+  #============================================================================
+  call_ci_build:
+    name: CI - Compilar y Empaquetar Artefacto
+    # MUY IMPORTANTE: Asegúrate que la ruta a tu workflow de CI sea correcta.
+    # Este es el workflow que tu colega creó y debe ser accesible (mismo repo o repo de reutilizables).
+    uses: ./.github/workflows/deploy-container-app.yml # CAMBIA ESTO A LA RUTA CORRECTA DEL WF DE CI DE TU COLEGA
+    with:
+      # Entradas para el Workflow de CI
+      workdir: './' # Directorio de trabajo para el CI
+      environment: ${{ github.event.inputs.environment_ci_target || 'integration' }} # Entorno para el CI
+      build-command: ${{ github.event.inputs.build_command_for_ci || 'mvn clean package -DskipTests' }} # Comando de compilación
+      java-version: '11' # Versión de Java según tu documento
+      compile_folder: '.' # AJUSTA ESTO: Directorio donde CI espera encontrar la carpeta target/ después de compilar
+      artifactory-url: 'https://davicienda.jfrog.io/artifactory' # URL de Artifactory (ajusta si es diferente)
+      use-artifactory: true # Asumimos que siempre se usa Artifactory para subir el artefacto
+      maven-repo-id: 'central' # ID del repo Maven en Artifactory (ajusta si es diferente)
+      pom-version-file: ${{ github.event.inputs.pom_version_file_path || 'pom.xml' }} # AJUSTA ESTO: Ruta al pom.xml principal
+    secrets:
+      # Secretos requeridos por el workflow de CI de tu colega
+      ARTIFACTORY_READER_USER: ${{ secrets.ARTIFACTORY_READER_USER_CI }}
+      ARTIFACTORY_READER_PASSWORD: ${{ secrets.ARTIFACTORY_READER_PASSWORD_CI }}
+      ARTIFACTORY_WRITER_USER: ${{ secrets.ARTIFACTORY_WRITER_USER_CI }}
+      ARTIFACTORY_WRITER_PASSWORD: ${{ secrets.ARTIFACTORY_WRITER_PASSWORD_CI }}
+      TOKEN_GITHUB: ${{ secrets.GH_TOKEN_FOR_CI_ACTION_CHECKOUT }} # Si el CI necesita un token especial para hacer checkout de otras actions
+
+    # IMPORTANTE: El workflow de CI DEBE generar estas salidas.
+    # Si no lo hace, el job 'call_cd_reusable' tendrá que re-derivarlas o fallará.
+    # Asegúrate que los nombres de las salidas del CI coincidan con los que se esperan aquí.
+    # Ejemplo de cómo el job 'build' del CI podría definir sus salidas:
+    # outputs:
+    #   ci_original_artifact_filename: ${{ env.filename }} # ej. ExpertoContable-3.4.ear
+    #   ci_jfrog_zip_name: ${{ env.NEW_NAME }}.zip         # ej. PR-123.zip (asegúrate que incluya .zip)
+    #   ci_jfrog_repo_path: ${{ env.JFROG_REPOSITORY }}    # ej. ExpertoContable-int
+
+  #============================================================================
+  # JOB 2: LLAMAR AL PIPELINE REUTILIZABLE DE CD
+  #============================================================================
+  call_cd_reusable:
+    name: CD - Desplegar en WebLogic
+    needs: call_ci_build # Depende de que el CI termine exitosamente
+    # La ruta al nuevo CD reutilizable. Puede estar en este mismo repo o en un repo centralizado.
+    # Este es el workflow 'generic_jfrog_to_weblogic_cd_es_v1' que guardaste.
+    uses: ./.github/workflows/generic-jfrog-to-weblogic-cd_es.yml 
+    with:
+      # Mapeo de salidas de CI a entradas de CD
+      # Asegúrate que los nombres de 'needs.call_ci_build.outputs.*' coincidan con las salidas reales del CI.
+      jfrog_zip_artifact_name: ${{ needs.call_ci_build.outputs.ci_jfrog_zip_name_output || format('PR-{0}.zip', github.run_number) }} # Fallback si el CI no da el nombre del zip
+      jfrog_zip_repository_path: ${{ needs.call_ci_build.outputs.ci_jfrog_repo_path_output || format('{0}-{1}', github.event.repository.name, inputs.environment_ci_target == 'integration' && 'int' || inputs.environment_ci_target) }} # Fallback si el CI no da el repo path
+      jfrog_base_url: 'https://davicienda.jfrog.io/artifactory'
+      original_artifact_filename_inside_zip: ${{ needs.call_ci_build.outputs.ci_original_artifact_filename_output }} # ¡Esta salida del CI es CRUCIAL!
+      
+      # Mapeo del entorno de CI al entorno de CD y sus configuraciones específicas
+      cd_environment_name: ${{ (github.event.inputs.environment_ci_target == 'integration' && 'desarrollo') || (github.event.inputs.environment_ci_target == 'laboratory' && 'laboratorio') || (github.event.inputs.environment_ci_target == 'production' && 'produccion') || 'desconocido' }}
+      weblogic_target_ssh_host: ${{ (github.event.inputs.environment_ci_target == 'integration' && secrets.AZURE_VM_IP_DESARROLLO) || (github.event.inputs.environment_ci_target == 'laboratory' && secrets.AZURE_VM_IP_LABORATORIO) || (github.event.inputs.environment_ci_target == 'production' && secrets.AZURE_VM_IP_PRODUCCION) }}
+      weblogic_admin_url: ${{ (github.event.inputs.environment_ci_target == 'integration' && 't3://10.229.165.5:7001') || (github.event.inputs.environment_ci_target == 'laboratory' && 't3://TU_HOST_LAB:7001') || (github.event.inputs.environment_ci_target == 'production' && 't3://TU_HOST_PROD:7001') }} # ¡REEMPLAZAR HOSTS DE LAB Y PROD!
+      weblogic_targets_cluster: ${{ (github.event.inputs.environment_ci_target == 'integration' && 'CLUSTER_HWEC-D') || (github.event.inputs.environment_ci_target == 'laboratory' && 'CLUSTER_HWEC-L') || (github.event.inputs.environment_ci_target == 'production' && 'CLUSTER_HWEC-P') }}
+      
+    secrets: # Pasar los secretos necesarios al CD reutilizable
+      # Secretos para JFrog (el CD reutilizable los espera con estos nombres)
+      JFROG_USER: ${{ secrets.JFROG_USER_CD }} # Usuario para descargar de JFrog en CD
+      JFROG_PASSWORD: ${{ secrets.JFROG_PASSWORD_CD }} # Contraseña para descargar de JFrog en CD
+      
+      # Secretos para SSH a la VM de Azure (el CD reutilizable los espera con estos nombres)
+      AZURE_VM_SSH_USER: ${{ secrets.AZURE_VM_SSH_USER_CD }}
+      AZURE_VM_SSH_PRIVATE_KEY: ${{ secrets.AZURE_VM_SSH_PRIVATE_KEY_CD }}
+      
+      # Secreto para WebLogic (el CD reutilizable lo espera con este nombre)
+      # La selección del valor correcto según el entorno se hace aquí.
+      WEBLOGIC_DEPLOYER_PASSWORD: ${{ (github.event.inputs.environment_ci_target == 'integration' && secrets.WEBLOGIC_PASSWORD_DESARROLLO) || (github.event.inputs.environment_ci_target == 'laboratory' && secrets.WEBLOGIC_PASSWORD_LABORATORIO) || (github.event.inputs.environment_ci_target == 'production' && secrets.WEBLOGIC_PASSWORD_PRODUCCION) }}
