@@ -1,0 +1,321 @@
+name: Deploy Container App
+on:
+  workflow_call:
+    inputs:
+      workdir:
+        description: 'The directory of the function'
+        required: false
+        default: './'
+        type: string
+      environment:
+        description: 'The environment to deploy'
+        required: true
+        type: string
+      acr:
+        description: 'The Azure Container Registry'
+        required: false
+        type: string
+      folder:
+        description: 'The folder inside ACR'
+        required: false
+        type: string
+      artifact-name:
+        description: 'The artifact name'
+        required: false
+        type: string
+      artifact-path:
+        description: 'The artifact path'
+        required: false
+        type: string
+      build-command:
+        description: 'The run command'
+        required: true
+        type: string
+      java-version:
+        description: 'The JDK version to make available on the path'
+        required: false
+        default: '17'
+        type: string
+      java-distribution:
+        description: 'The JDK distribution'
+        required: false
+        default: 'corretto'
+        type: string
+      workload-path:
+        description: 'The workload path'
+        required: false
+        type: string
+      container-app-name:
+        description: 'The container app name'
+        required: false
+        type: string
+      compile_folder:
+        description: 'Folder where it find the .jar, .ear or .war'
+        required: true
+        type: string
+      artifactory-url:
+        description: 'Base URL for artifactory (without trailing slash)'
+        required: false
+        default: 'https://davicienda.jfrog.io/artifactory'
+        type: string
+      use-artifactory:
+        description: 'Whether to use Artifactory/JFrog for dependencies'
+        required: false
+        default: false
+        type: boolean
+      maven-repo-id:
+        description: 'Maven repository ID to use in settings.xml'
+        required: false
+        default: 'central'
+        type: string
+      pom-version-file:
+        description: 'Path to the pom.xml file'
+        required: true
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: ${{ inputs.java-version }} 
+          distribution: ${{ inputs.java-distribution }} 
+
+      - name: Create settings file directory
+        run: mkdir -p /home/runner/.m2
+
+      - name: Create Maven settings with Artifactory
+        if: ${{ inputs.use-artifactory }}
+        run: |
+          echo "Generando archivo settings con credenciales jfrog"
+          ARTIFACTORY_URL="${{ inputs.artifactory-url }}/maven-davi"
+          echo '<?xml version="1.0" encoding="UTF-8"?>
+            <settings
+                xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 http://maven.apache.org/xsd/settings-1.0.0.xsd"
+                xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+                xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                <servers>
+                    <server>
+                        <username>${{ secrets.ARTIFACTORY_READER_USER }}</username>
+                        <password>${{ secrets.ARTIFACTORY_READER_PASSWORD }}</password>
+                        <id>${{ inputs.maven-repo-id }}</id>
+                    </server>
+                    <server>
+                        <username>${{ secrets.ARTIFACTORY_READER_USER }}</username>
+                        <password>${{ secrets.ARTIFACTORY_READER_PASSWORD }}</password>
+                        <id>snapshots</id>
+                    </server>
+                </servers>
+                <profiles>
+                    <profile>
+                        <id>artifactory</id>
+                        <repositories>
+                            <repository>
+                                <id>${{ inputs.maven-repo-id }}</id>
+                                <url>'$ARTIFACTORY_URL'</url>
+                                <releases>
+                                    <checksumPolicy>ignore</checksumPolicy>
+                                </releases>
+                                <snapshots>
+                                    <checksumPolicy>ignore</checksumPolicy>
+                                </snapshots>
+                            </repository>
+                            <repository>
+                                <id>snapshots</id>
+                                <url>'$ARTIFACTORY_URL'</url>
+                                <releases>
+                                    <checksumPolicy>ignore</checksumPolicy>
+                                </releases>
+                                <snapshots>
+                                    <checksumPolicy>ignore</checksumPolicy>
+                                </snapshots>
+                            </repository>
+                        </repositories>
+                    </profile>
+                </profiles>
+                <activeProfiles>
+                    <activeProfile>artifactory</activeProfile>
+                </activeProfiles>
+            </settings>' > /home/runner/.m2/settings.xml
+
+      - name: Get version from pom.xml
+        run: |
+          POM_FILE=${{ inputs.pom-version-file }}
+
+          artifactId=$(grep -oPm1 "(?<=<artifactId>)[^<]+" "$POM_FILE" | head -n 1)
+          version=$(grep -oPm1 "(?<=<version>)[^<]+" "$POM_FILE" | head -n 1)
+          packaging=$(grep -oPm1 "(?<=<packaging>)[^<]+" "$POM_FILE" | head -n 1)
+
+          version="${artifactId}-${version}.${packaging}"
+
+          echo "filename=$version" >> $GITHUB_ENV
+          echo "filename=$filename"
+
+      - name: Build
+        run: ${{ inputs.build-command }}
+
+      - name: Checkout Retrive Action
+        uses: actions/checkout@v4
+        with:
+          repository: davivienda-colombia/davi-coe-action-jfrog-pipeline
+          ref: 'v1.14.0'
+          token: ${{ secrets.TOKEN_GITHUB }}
+          persist-credentials: false
+          path: ./.github/actions/davi-coe-action-jfrog-pipeline
+
+      - name: Set version for JFrog
+        if: ${{ inputs.use-artifactory }}
+        env:
+          REPO: ${{ github.event.repository.name }}
+          ENVIRONMENT:  ${{ inputs.environment }}
+        run: |
+          case "$ENVIRONMENT" in
+            integration)
+              dest="int"
+              ;;
+            laboratory)
+              dest="lab"
+              ;;
+            production)
+              dest="prod"
+              ;;
+            *)
+              echo "ERROR: Ambiente no reconocido: $ENVIRONMENT"
+              exit 1
+              ;;
+          esac
+
+          NAME=$REPO-$dest
+          echo "JFROG_REPOSITORY=$NAME" >> $GITHUB_ENV
+
+          # descomentarear estas lineas cuando se tenga el flujo completo
+
+          # PR_COMMIT=$(git log --merges --grep="Merge pull request" --pretty=format:"%H" | head -n 1)
+          # PR_NUMBER=$(git log -1 --pretty=format:"%s" $PR_COMMIT | grep -oP '(?<=#)\d+')   
+          # NEW_NAME="PR-$PR_NUMBER"
+
+          NEW_NAME="PR-${GITHUB_RUN_NUMBER}"
+          echo "NEW_NAME=$NEW_NAME" >> $GITHUB_ENV
+
+      - name: Compress artifact
+        run: |
+          zip -j ${{ env.NEW_NAME }}.zip "${{ inputs.compile_folder }}/target/${{ env.filename }}"
+
+      - name: Upload package to JFrog ${{ inputs.environment}}
+        if: ${{ inputs.environment == 'integration' && inputs.use-artifactory }}
+        uses: ./.github/actions/davi-coe-action-jfrog-pipeline/retrieve-artifact
+        with:
+          function: 'upload'
+          artifactory-writer-user: ${{ secrets.ARTIFACTORY_WRITER_USER }}
+          artifactory-writer-password: ${{ secrets.ARTIFACTORY_WRITER_PASSWORD }}
+          artifact-url: https://davicienda.jfrog.io/artifactory/${{ env.JFROG_REPOSITORY }}
+          artifact: ${{ env.NEW_NAME }}.zip
+
+      - name: Validate .zip
+        run: ls -la
+
+
+
+          ##########################################
+          # CON LA PARTE ANTERIOR SE CONCLUYE EL COMPILADO Y VERSIONAMIENTO POR AMBIENTES EN JFROG, YA PUEDE COGER EL PAQUETE EL CUAL DEJO EN UN .ZIP
+          # PARA PROCEDER CON EL DESPLIEGUE DEL PROYECTO
+
+
+        
+
+
+      # - name: 🏷️Check tag version
+      #   id: obtener-tag   
+      #   working-directory: ./      
+      #   run: |
+      #       git fetch --tags origin $ENV_NAME
+      #       git tag --points-at HEAD --sort=-v:refname
+      #       version=$(git tag --points-at HEAD --sort=-v:refname | head -n 1)
+      #       echo "version=$version" >> $GITHUB_ENV
+      #       if [ -n "$version" ]; then
+      #         echo -e "Se encontró la version = $version"
+      #       else
+      #         echo -e "No se encontró version para este despliegue, se asigna : $BUILD_NUMBER"
+      #         echo "version=$(echo $BUILD_NUMBER)" >> $GITHUB_ENV                            
+      #       fi
+      #   env:
+      #       BUILD_NUMBER: ${{ github.run_number }}
+
+      # - name: Build Docker Image
+      #   working-directory: ./
+      #   env:
+      #     CONTAINER_NAME: ${{ inputs.acr }}
+      #     FOLDER: ${{ inputs.folder }}
+      #     version: ${{ env.version }}
+      #   run: |           
+      #     echo "docker $FOLDER"
+      #     docker build -t $FOLDER --no-cache=true .   
+      #     echo "docker tag ${FOLDER} ${CONTAINER_NAME}.azurecr.io/${FOLDER}:${version}"
+      #     docker tag ${FOLDER} ${CONTAINER_NAME}.azurecr.io/${FOLDER}:${version}
+      #     docker images
+
+      # - name: Azure login
+      #   uses: azure/login@v2
+      #   with:
+      #     client-id: ${{ secrets.AZURE_CLIENT_ID }}
+      #     tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+      #     subscription-id: ${{ secrets.AZURE_INTEGRATION_SUBSCRIPTION_ID }}
+
+      # - uses: azure/docker-login@v2
+      #   with:
+      #     login-server: ${{ secrets.LOGIN_SERVER}}
+      #     username: ${{ secrets.REGISTRY_USERNAME }}
+      #     password: ${{ secrets.REGISTRY_PASSWORD }}
+        
+      # - name: Pushes Docker Image
+      #   id: docker-tag
+      #   env:
+      #     CONTAINER_NAME: ${{ inputs.acr }}
+      #     FOLDER: ${{ inputs.folder }}
+      #     version: ${{ env.version }}
+      #   run: |
+      #     echo "Docker image name: $CONTAINER_NAME.azurecr.io/$FOLDER:$version"
+      #     docker push $CONTAINER_NAME.azurecr.io/$FOLDER:$version
+      #     # echo "::set-output name=imageTag::$CONTAINER_NAME.azurecr.io/$FOLDER:$version"
+      #     echo "imageTag=$CONTAINER_NAME.azurecr.io/$FOLDER:$version" >> $GITHUB_ENV
+      #     echo "Imagen subida a Azure Container Registry"
+
+      # - name: Modify workload file
+      #   env:
+      #     SUBSCRIPTION: ${{ secrets.AZURE_INTEGRATION_SUBSCRIPTION_ID }}
+      #     CONTAINER-APP-NAME: ${{ inputs.container-app-name }}
+      #     RG: ${{ secrets.RESOURCE_GROUP }}
+      #   run: |
+      #     cat ${{ inputs.workload-path }} | sed "s#SUBSCRIPTION#$SUBSCRIPTION#g" | sed "s#imageTag#${{ env.imageTag }}#g" | sed "s#RG#$RG#g" > workload.yaml
+      #     cat workload.yaml
+
+      # - name: Deploy Container App
+      #   env:
+      #     RG: ${{ secrets.RESOURCE_GROUP }}
+      #     CONTAINER-APP-NAME: ${{ inputs.container-app-name }}
+      #   run: |
+      #     az containerapp update --name ${{ env.CONTAINER-APP-NAME }} --resource-group ${{ env.RG }} --yaml workload.yaml            
+      
+      # - name: Log out Azure
+      #   if: always()
+      #   run: az logout
+
+      # - name: Wait and delete
+      #   if: always()
+      #   env:
+      #     GITHUB_TOKEN: ${{ secrets.TOKEN_GITHUB }}
+      #   run: |
+      #     sleep 10
+      #     echo "******************************************"
+      #     echo "Delete GitHub Artifacts"
+      #     artifacts=$(curl -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/repos/${{ github.repository }}/actions/artifacts)
+      #     for artifact in $(echo "${artifacts}" | jq -r '.artifacts[] | @base64'); do
+      #       artifact_id=$(echo ${artifact} | base64 --decode | jq -r '.id')
+      #       curl -X DELETE -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/repos/${{ github.repository }}/actions/artifacts/${artifact_id}
+      #     done
+      #     echo "******************************************"
