@@ -1,25 +1,51 @@
-name: Deploy App to Azure Container App
+name: Pipeline CI/CD Principal para ExpertoContable
 
 on:
   push:
     branches:
-      - main
-  # workflow_dispatch:
+      - integration # Ajusta según tu rama principal
 
 jobs:
-  call-reusable-workflow:
-    uses: ORG_O_USUARIO/REPO_DE_WORKFLOWS_REUTILIZABLES/.github/workflows/reusable-deploy-container-app.yml@main # ¡Asegúrate que esta ruta sea correcta!
+  #============================================================================
+  # JOB 1: EJECUTAR EL PIPELINE DE CI (COMPILACIÓN Y EMPAQUETADO)
+  #============================================================================
+  call_ci_build:
+    name: "🛠️ CI - Compilar y Empaquetar Artefacto"
+    uses: ./.github/workflows/deploy-container-app.yml
     with:
-      image_name: 'mi-aplicacion-especifica'
-      container_app_name: 'nombre-de-mi-container-app'
-      resource_group_name: 'mi-grupo-de-recursos-azure'
-      acr_name: 'nombredecontainerregistry'
-       dockerfile_path: './deploy/Dockerfile' # Opcional
-       image_tag: 'v1.2.3' # Opcional
-
-      environment_yaml_path: 'container-app-environment.yaml'
-
+      workdir: './'
+      environment: integration
+      build-command: 'mvn clean package -DskipTests'
+      java-version: '11'
+      compile_folder: '.'
+      artifactory-url: 'https://davicienda.jfrog.io/artifactory'
+      use-artifactory: true
+      maven-repo-id: 'central'
+      pom-version-file: 'pom.xml'
     secrets:
-      AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS_PROD }}
-      ACR_USERNAME: ${{ secrets.ACR_USERNAME_PROD }}
-      ACR_PASSWORD: ${{ secrets.ACR_PASSWORD_PROD }}
+      ARTIFACTORY_READER_USER: ${{ secrets.ARTIFACTORY_READER_USER_CI }}
+      ARTIFACTORY_READER_PASSWORD: ${{ secrets.ARTIFACTORY_READER_PASSWORD_CI }}
+      ARTIFACTORY_WRITER_USER: ${{ secrets.ARTIFACTORY_WRITER_USER_CI }}
+      ARTIFACTORY_WRITER_PASSWORD: ${{ secrets.ARTIFACTORY_WRITER_PASSWORD_CI }}
+      TOKEN_GITHUB: ${{ secrets.GH_TOKEN_FOR_CI_ACTION_CHECKOUT }}
+
+  #============================================================================
+  # JOB 2: LLAMAR AL PIPELINE REUTILIZABLE DE CD (EXTRACCIÓN Y DESPLIEGUE)
+  #============================================================================
+  call_cd_reusable:
+    name: "🚀 CD - Desplegar en WebLogic"
+    needs: call_ci_build
+    uses: ./.github/workflows/cd-local-zip-to-weblogic.yml
+    with:
+      zip_artifact_name: ${{ needs.call_ci_build.outputs.zip_name }}
+      artifact_name: ${{ needs.call_ci_build.outputs.artifact_name }}
+      environment: integration # Ajusta si necesitas despliegue a otro entorno
+    secrets:
+      AZURE_VM_SSH_USER: ${{ secrets.AZURE_VM_SSH_USER_CD }}
+      AZURE_VM_SSH_PRIVATE_KEY: ${{ secrets.AZURE_VM_SSH_PRIVATE_KEY_CD }}
+      WEBLOGIC_PASSWORD_DESARROLLO: ${{ secrets.WEBLOGIC_PASSWORD_DESARROLLO }}
+      WEBLOGIC_PASSWORD_LABORATORIO: ${{ secrets.WEBLOGIC_PASSWORD_LABORATORIO }}
+      WEBLOGIC_PASSWORD_PRODUCCION: ${{ secrets.WEBLOGIC_PASSWORD_PRODUCCION }}
+      AZURE_VM_IP_DESARROLLO: ${{ secrets.AZURE_VM_IP_DESARROLLO }}
+      AZURE_VM_IP_LABORATORIO: ${{ secrets.AZURE_VM_IP_LABORATORIO }}
+      AZURE_VM_IP_PRODUCCION: ${{ secrets.AZURE_VM_IP_PRODUCCION }}
