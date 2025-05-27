@@ -1,0 +1,23 @@
+name: Deploy Experto
+
+on:
+  push:
+    branches: [ feature/test-acla ]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy Integration
+    uses: davivienda-colombia/davi-coe-azure-common-reusable-pipeline/.github/workflows/deploy-java-container-app.yml@feauture/acla
+    with:
+      environment: integration
+      build-command: "cd experto-ejb && mvn clean compile package install && cd .. && cd experto-web && mvn clean compile package"
+      java-version: 17
+      artifactory-url: "https://davicienda.jfrog.io/artifactory"
+      use-artifactory: true
+      pom-version-file: ./experto-web/pom.xml
+      compile_folder: experto-web
+    secrets: inherit
