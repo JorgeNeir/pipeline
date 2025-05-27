@@ -77,6 +77,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
+    outputs:                    
+      zip_name: ${{ steps.set-outputs.outputs.zip_name }}
+      artifact_name: ${{ steps.set-outputs.outputs.artifact_name }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -219,11 +222,15 @@ jobs:
       - name: Validate .zip
         run: ls -la
 
+      - name: Exponer nombre del ZIP y EAR/WAR/JAR como outputs
+        id: set-outputs
+        run: |
+          echo "zip_name=${{ env.NEW_NAME }}.zip" >> $GITHUB_OUTPUT
+          echo "artifact_name=${{ env.filename }}" >> $GITHUB_OUTPUT
 
-
-          ##########################################
-          # CON LA PARTE ANTERIOR SE CONCLUYE EL COMPILADO Y VERSIONAMIENTO POR AMBIENTES EN JFROG, YA PUEDE COGER EL PAQUETE EL CUAL DEJO EN UN .ZIP
-          # PARA PROCEDER CON EL DESPLIEGUE DEL PROYECTO
+      ##########################################
+      # CON LA PARTE ANTERIOR SE CONCLUYE EL COMPILADO Y VERSIONAMIENTO POR AMBIENTES EN JFROG, YA PUEDE COGER EL PAQUETE EL CUAL DEJO EN UN .ZIP
+      # PARA PROCEDER CON EL DESPLIEGUE DEL PROYECTO
 
 
         
