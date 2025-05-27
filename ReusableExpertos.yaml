@@ -1,185 +1,121 @@
-name: CD Reutilizable - Despliegue de JFrog a WebLogic
+name: Deploy ExpertoContable to WebLogic (from CI ZIP)
 
 on:
   workflow_call:
     inputs:
-      # Información del artefacto desde CI/JFrog
-      jfrog_zip_artifact_name:
-        description: 'Nombre del artefacto ZIP en JFrog (ej. PR-123.zip)'
+      zip_artifact_name:
+        description: 'Nombre del archivo ZIP presente en el runner (ej. PR-123.zip)'
         required: true
         type: string
-      jfrog_zip_repository_path:
-        description: 'Ruta del repositorio en JFrog donde está el ZIP (ej. mi-repo-int)'
+      artifact_name:
+        description: 'Nombre del archivo EAR/WAR/JAR dentro del ZIP'
         required: true
         type: string
-      jfrog_base_url:
-        description: 'URL base de JFrog Artifactory'
+      environment:
+        description: 'Entorno de despliegue ("integration", "laboratory" o "production")'
         required: true
         type: string
-      original_artifact_filename_inside_zip:
-        description: 'Nombre original del .ear/.war dentro del ZIP (ej. ExpertoContable-3.4.ear)'
-        required: true
-        type: string
-      
-      # Información del entorno y WebLogic
-      cd_environment_name: # ej. desarrollo, laboratorio, produccion
-        description: 'Nombre del entorno de CD (usado para seleccionar secretos/configuraciones)'
-        required: true
-        type: string
-      weblogic_target_ssh_host:
-        description: 'IP/Hostname del servidor WebLogic (Azure VM)'
-        required: true
-        type: string
-      weblogic_admin_url:
-        description: 'URL del AdminServer de WebLogic para el despliegue'
-        required: true
-        type: string
-      weblogic_targets_cluster:
-        description: 'Cluster/Targets de WebLogic para el despliegue (ej. CLUSTER_HWEC-D)'
-        required: true
-        type: string
-
     secrets:
-      # Acceso a JFrog
-      JFROG_USER:
-        description: 'Usuario de JFrog para descarga'
-        required: true
-      JFROG_PASSWORD:
-        description: 'Contraseña/API Key de JFrog para descarga'
-        required: true
-      # Acceso SSH a VM de Azure
       AZURE_VM_SSH_USER:
-        description: 'Usuario SSH para la VM de Azure de WebLogic'
+        description: 'Usuario SSH para la VM de Azure'
         required: true
       AZURE_VM_SSH_PRIVATE_KEY:
-        description: 'Clave privada SSH para la VM de Azure de WebLogic'
+        description: 'Llave privada SSH para la VM de Azure'
         required: true
-      # Acceso a WebLogic
-      WEBLOGIC_DEPLOYER_PASSWORD:
-        description: 'Contraseña del usuario deployer de WebLogic'
+      WEBLOGIC_PASSWORD_DESARROLLO:
+        description: 'Password para WebLogic en desarrollo'
         required: true
-    
-    outputs: # Salidas de este workflow reutilizable
-      deployed_application_name:
-        description: "Nombre de la aplicación desplegada en WebLogic."
-        value: ${{ jobs.deploy_to_weblogic.outputs.weblogic_app_name_output }}
-      deployed_artifact_file:
-        description: "Nombre del archivo de artefacto desplegado."
-        value: ${{ inputs.original_artifact_filename_inside_zip }}
+      WEBLOGIC_PASSWORD_LABORATORIO:
+        description: 'Password para WebLogic en laboratorio'
+        required: true
+      WEBLOGIC_PASSWORD_PRODUCCION:
+        description: 'Password para WebLogic en producción'
+        required: true
+      AZURE_VM_IP_DESARROLLO:
+        description: 'IP de la VM de desarrollo'
+        required: true
+      AZURE_VM_IP_LABORATORIO:
+        description: 'IP de la VM de laboratorio'
+        required: true
+      AZURE_VM_IP_PRODUCCION:
+        description: 'IP de la VM de producción'
+        required: true
 
 jobs:
-  deploy_to_weblogic:
-    name: Desplegar Artefacto en WebLogic
+  deploy_pipeline:
+    name: CD - Preparar artefacto presente y desplegar en WebLogic
     runs-on: ubuntu-latest
-    outputs:
-      weblogic_app_name_output: ${{ steps.derive_names.outputs.weblogic_app_name }}
-
     env:
-      WEBLOGIC_INSTALL_PATH_ON_SERVER: '/u01/WLS14.1.1/middleware/domains/instaladores/'
-      WEBLOGIC_HOME_LIB_PATH_ON_SERVER: '/u01/WLS14.1.1/middleware/wlserver/server/lib/'
-      WEBLOGIC_DEPLOY_USER_ENV: 'weblogicdeploy' # Usuario deployer de WebLogic
-      JAVA_PATH_ON_SERVER: 'java' # Ruta a Java en el servidor WebLogic
-
+      SSH_HOST_VAR: ${{ (inputs.environment == 'integration' && secrets.AZURE_VM_IP_DESARROLLO) || (inputs.environment == 'laboratory' && secrets.AZURE_VM_IP_LABORATORIO) || secrets.AZURE_VM_IP_PRODUCCION }}
+      SSH_USER_VAR: ${{ secrets.AZURE_VM_SSH_USER }}
+      WEBLOGIC_PASSWORD: ${{ (inputs.environment == 'integration' && secrets.WEBLOGIC_PASSWORD_DESARROLLO) || (inputs.environment == 'laboratory' && secrets.WEBLOGIC_PASSWORD_LABORATORIO) || secrets.WEBLOGIC_PASSWORD_PRODUCCION }}
+      WEBLOGIC_ADMIN_URL: ${{ (inputs.environment == 'integration' && 't3://10.229.165.5:7001') || (inputs.environment == 'laboratory' && 't3://TU_LAB_HOST:7001') || 't3://TU_PROD_HOST:7001' }}
+      WEBLOGIC_TARGETS: ${{ (inputs.environment == 'integration' && 'CLUSTER_HWEC-D') || (inputs.environment == 'laboratory' && 'CLUSTER_HWEC-L') || 'CLUSTER_HWEC-P' }}
+      WEBLOGIC_USERNAME: 'weblogicdeploy'
+      WEBLOGIC_HOME_LIB_PATH: '/u01/WLS14.1.1/middleware/wlserver/server/lib/'
+      ARTIFACT_DEST_DIR: '/u01/WLS14.1.1/middleware/domains/instaladores'
     steps:
-      - name: Mostrar Entradas (para depuración)
-        run: |
-          echo "Iniciando despliegue para el entorno: ${{ inputs.cd_environment_name }}"
-          echo "Artefacto ZIP en JFrog: ${{ inputs.jfrog_zip_artifact_name }}"
-          echo "Repositorio ZIP en JFrog: ${{ inputs.jfrog_zip_repository_path }}"
-          echo "Archivo original dentro del ZIP: ${{ inputs.original_artifact_filename_inside_zip }}"
-          echo "Host SSH WebLogic: ${{ inputs.weblogic_target_ssh_host }}"
-          echo "URL Admin WebLogic: ${{ inputs.weblogic_admin_url }}"
-          echo "Targets WebLogic: ${{ inputs.weblogic_targets_cluster }}"
 
-      #------------------------------------------------------------------------
-      # Paso 1: Descargar y Preparar Artefacto
-      #------------------------------------------------------------------------
-      - name: Descargar Artefacto Comprimido (.zip) desde JFrog
+      - name: "📝 [Paso 1] Definir nombres de artefacto y aplicación para WebLogic"
+        id: setvars
         run: |
-          ARTIFACT_DOWNLOAD_URL="${{ inputs.jfrog_base_url }}/${{ inputs.jfrog_zip_repository_path }}/${{ inputs.jfrog_zip_artifact_name }}"
-          echo "Descargando ZIP desde: $ARTIFACT_DOWNLOAD_URL"
-          curl -u "${{ secrets.JFROG_USER }}:${{ secrets.JFROG_PASSWORD }}" -L -o "${{ inputs.jfrog_zip_artifact_name }}" "$ARTIFACT_DOWNLOAD_URL"
-          
-          if [ ! -f "${{ inputs.jfrog_zip_artifact_name }}" ]; then
-            echo "Error: Falló la descarga del ZIP desde $ARTIFACT_DOWNLOAD_URL"
-            exit 1
-          fi
-          echo "ZIP descargado: ${{ inputs.jfrog_zip_artifact_name }}"
-          ls -l "${{ inputs.jfrog_zip_artifact_name }}"
+          echo "artifact_filename=${{ inputs.artifact_name }}" >> $GITHUB_ENV
+          APP_NAME="${{ inputs.artifact_name }}"
+          echo "application_name=$APP_NAME" >> $GITHUB_ENV
 
-      - name: Extraer Artefacto Desplegable (ej. .ear) del ZIP
+      - name: "📦 [Paso 2] Extraer artefacto del ZIP local"
         run: |
-          echo "Extrayendo ${{ inputs.original_artifact_filename_inside_zip }} desde ${{ inputs.jfrog_zip_artifact_name }}"
-          unzip "${{ inputs.jfrog_zip_artifact_name }}" "${{ inputs.original_artifact_filename_inside_zip }}"
-          
-          if [ ! -f "${{ inputs.original_artifact_filename_inside_zip }}" ]; then
-            echo "Error: Falló la extracción de ${{ inputs.original_artifact_filename_inside_zip }} del zip."
-            exit 1
-          fi
-          echo "Artefacto extraído: ${{ inputs.original_artifact_filename_inside_zip }}"
-          ls -l "${{ inputs.original_artifact_filename_inside_zip }}"
+          unzip -o "${{ inputs.zip_artifact_name }}" "${{ inputs.artifact_name }}"
+          ls -l "${{ inputs.artifact_name }}"
 
-      - name: Derivar Nombre de Aplicación para WebLogic
-        id: derive_names
-        run: |
-          local_original_filename="${{ inputs.original_artifact_filename_inside_zip }}"
-          base_name_no_ext=$(echo "$local_original_filename" | rev | cut -d. -f2- | rev) # Ej. ExpertoContable-3.4
-          app_id_part=$(echo "$base_name_no_ext" | rev | cut -d- -f2- | rev) # Ej. ExpertoContable
-          version_part=$(echo "$base_name_no_ext" | rev | cut -d- -f1 | rev) # Ej. 3.4
-          derived_weblogic_app_name="${app_id_part}_v${version_part}" # Ej. ExpertoContable_v3.4
-          
-          echo "Nombre Original: $local_original_filename, Nombre para WebLogic: $derived_weblogic_app_name"
-          echo "::set-output name=weblogic_app_name::$derived_weblogic_app_name"
-
-      - name: Copiar Artefacto Extraído al Servidor WebLogic (VM de Azure)
+      - name: "🚚 [Paso 3] Copiar artefacto al servidor WebLogic (Azure VM)"
         uses: appleboy/scp-action@v0.1.7
         with:
-          host: ${{ inputs.weblogic_target_ssh_host }}
-          username: ${{ secrets.AZURE_VM_SSH_USER }}
+          host: ${{ env.SSH_HOST_VAR }}
+          username: ${{ env.SSH_USER_VAR }}
           key: ${{ secrets.AZURE_VM_SSH_PRIVATE_KEY }}
-          source: "${{ inputs.original_artifact_filename_inside_zip }}" # El .ear/.war extraído
-          target: "${{ env.WEBLOGIC_INSTALL_PATH_ON_SERVER }}" # ej. /u01/WLS14.1.1/middleware/domains/instaladores/
+          source: "${{ inputs.artifact_name }}"
+          target: "${{ env.ARTIFACT_DEST_DIR }}/"
 
-      #------------------------------------------------------------------------
-      # Paso 2: Ejecutar Comandos de Despliegue en WebLogic vía SSH
-      #------------------------------------------------------------------------
-      - name: Preparar Script de Despliegue para WebLogic
-        id: deploy_script_prep
-        run: |
-          # Comando para desinstalar la versión anterior (undeploy)
-          # El input 'skip_undeploy' podría agregarse si se necesita esa flexibilidad
-          UNDEPLOY_CMD="${{ env.JAVA_PATH_ON_SERVER }} -cp ${{ env.WEBLOGIC_HOME_LIB_PATH_ON_SERVER }}/weblogic.jar weblogic.Deployer \
-            -adminurl ${{ inputs.weblogic_admin_url }} \
-            -username ${{ env.WEBLOGIC_DEPLOY_USER_ENV }} \
-            -password '${{ secrets.WEBLOGIC_DEPLOYER_PASSWORD }}' \
-            -undeploy \
-            -name ${{ steps.derive_names.outputs.weblogic_app_name }} \
-            -targets ${{ inputs.weblogic_targets_cluster }};"
-          
-          # Comando para instalar la nueva versión (deploy)
-          DEPLOY_CMD="${{ env.JAVA_PATH_ON_SERVER }} -cp ${{ env.WEBLOGIC_HOME_LIB_PATH_ON_SERVER }}/weblogic.jar weblogic.Deployer \
-            -adminurl ${{ inputs.weblogic_admin_url }} \
-            -username ${{ env.WEBLOGIC_DEPLOY_USER_ENV }} \
-            -password '${{ secrets.WEBLOGIC_DEPLOYER_PASSWORD }}' \
-            -deploy \
-            -name ${{ steps.derive_names.outputs.weblogic_app_name }} \
-            -source ${{ env.WEBLOGIC_INSTALL_PATH_ON_SERVER }}${{ inputs.original_artifact_filename_inside_zip }} \
-            -targets ${{ inputs.weblogic_targets_cluster }} \
-            -upload;"
-
-          # Script completo a ejecutar en el servidor remoto
-          # Se ejecuta undeploy primero, y si falla, el script podría detenerse (depende del shell y `set -e`)
-          # Para mayor robustez, se podría manejar errores entre comandos.
-          FULL_SCRIPT="${UNDEPLOY_CMD} echo 'Undeploy intentado (ignorar error si la app no existía). Procediendo con deploy.'; ${DEPLOY_CMD} echo 'Deploy intentado. Verificar logs del servidor WebLogic para confirmación final.'"
-          
-          # Escapar comillas simples para que el script SSH lo maneje correctamente
-          ESCAPED_FULL_SCRIPT=$(echo "$FULL_SCRIPT" | sed "s/'/'\\\\''/g")
-          echo "::set-output name=remote_script::$ESCAPED_FULL_SCRIPT"
-
-      - name: Ejecutar Despliegue en Servidor WebLogic vía SSH
-        uses: appleboy/ssh-action@v1.0.3
+      - name: "🧹 [Paso 4] Desinstalar versión anterior del aplicativo en WebLogic (Undeploy, ignora error si no existe)"
+        uses: appleboy/ssh-action@v0.1.7
         with:
-          host: ${{ inputs.weblogic_target_ssh_host }}
-          username: ${{ secrets.AZURE_VM_SSH_USER }}
+          host: ${{ env.SSH_HOST_VAR }}
+          username: ${{ env.SSH_USER_VAR }}
           key: ${{ secrets.AZURE_VM_SSH_PRIVATE_KEY }}
-          script: ${{ steps.deploy_script_prep.outputs.remote_script }}
+          script: |
+            echo "Intentando undeploy de ${{ env.application_name }}"
+            java -cp ${{ env.WEBLOGIC_HOME_LIB_PATH }}/weblogic.jar weblogic.Deployer \
+              -adminurl ${{ env.WEBLOGIC_ADMIN_URL }} \
+              -username ${{ env.WEBLOGIC_USERNAME }} \
+              -password ${{ env.WEBLOGIC_PASSWORD }} \
+              -undeploy \
+              -name ${{ env.application_name }} \
+              -targets ${{ env.WEBLOGIC_TARGETS }} || echo "Undeploy falló, probablemente la app no existe. Continuando..."
+
+      - name: "🚀 [Paso 5] Desplegar nuevo artefacto en WebLogic"
+        uses: appleboy/ssh-action@v0.1.7
+        with:
+          host: ${{ env.SSH_HOST_VAR }}
+          username: ${{ env.SSH_USER_VAR }}
+          key: ${{ secrets.AZURE_VM_SSH_PRIVATE_KEY }}
+          script: |
+            echo "Realizando deploy de ${{ env.application_name }}"
+            java -cp ${{ env.WEBLOGIC_HOME_LIB_PATH }}/weblogic.jar weblogic.Deployer \
+              -adminurl ${{ env.WEBLOGIC_ADMIN_URL }} \
+              -username ${{ env.WEBLOGIC_USERNAME }} \
+              -password ${{ env.WEBLOGIC_PASSWORD }} \
+              -deploy \
+              -name ${{ env.application_name }} \
+              -source ${{ env.ARTIFACT_DEST_DIR }}/${{ env.artifact_filename }} \
+              -targets ${{ env.WEBLOGIC_TARGETS }} \
+              -upload
+
+      # - name: "🔄 [Paso 6] (Opcional) Reiniciar manejadores y limpiar cache"
+      #   uses: appleboy/ssh-action@v0.1.7
+      #   with:
+      #     host: ${{ env.SSH_HOST_VAR }}
+      #     username: ${{ env.SSH_USER_VAR }}
+      #     key: ${{ secrets.AZURE_VM_SSH_PRIVATE_KEY }}
+      #     script: |
+      #       # Aquí comandos para reiniciar servicios y limpiar cache
