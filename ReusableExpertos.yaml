@@ -1,433 +1,371 @@
-name: Unified CI/CD WebLogic Deployment
+name: CI/CD Java Application Deployment on Azure VM -> WebLogic
 
 on:
   workflow_call:
     inputs:
       workdir:
-        description: 'Directorio base del proyecto o módulo.'
+        description: 'The directory of the function'
         required: false
         default: './'
         type: string
       environment:
-        description: 'Entorno para compilación y despliegue (ej. "integration", "laboratory", "production").'
+        description: 'The environment to deploy (e.g., integration, laboratory, production)'
         required: true
         type: string
+      #=============================== Inputs no usados =================================#
+      acr: {description: 'Unused', required: false, type: string}
+      folder: {description: 'Unused', required: false, type: string}
+      artifact-name: {description: 'Unused for pom-derived name', required: false, type: string}
+      artifact-path: {description: 'Unused', required: false, type: string}
+      #===================================================================================#
+            
       build-command:
-        description: 'Comando para construir el artefacto (ej. mvn clean package -DskipTests).'
+        description: 'The run command for build (e.g., mvn clean package)'
         required: true
         type: string
       java-version:
-        description: 'Versión del JDK a utilizar.'
+        description: 'The JDK version'
         required: false
         default: '17'
         type: string
       java-distribution:
-        description: 'Distribución del JDK (ej. "corretto", "temurin").'
+        description: 'The JDK distribution'
         required: false
         default: 'corretto'
         type: string
-      compile_folder: # ej: si el pom.xml está en 'mi-modulo/pom.xml' y el .war en 'mi-modulo/target/app.war', este input sería 'mi-modulo'
-        description: 'Carpeta (relativa a workdir) que contiene el directorio target del artefacto compilado.'
+      workload-path: {description: 'Unused', required: false, type: string}
+      container-app-name: {description: 'Unused', required: false, type: string}
+      compile_folder:
+        description: 'Folder where it find the .jar, .ear or .war (relative to workdir)'
         required: true
         type: string
-      pom-version-file: # ej: 'mi-modulo/pom.xml'
-        description: 'Ruta al archivo pom.xml para extraer la versión y artifactId.'
-        required: true
-        type: string
-      use-artifactory:
-        description: 'Indica si se debe usar Artifactory/JFrog para dependencias y publicación.'
-        required: false
-        default: false
-        type: boolean
       artifactory-url:
-        description: 'URL base de Artifactory (sin / al final).'
+        description: 'Base URL for artifactory (without trailing slash)'
         required: false
         default: 'https://davicienda.jfrog.io/artifactory'
         type: string
+      use-artifactory:
+        description: 'Whether to use Artifactory/JFrog for dependencies'
+        required: false
+        default: false
+        type: boolean
       maven-repo-id:
-        description: 'ID del repositorio Maven para Artifactory en settings.xml.'
+        description: 'Maven repository ID to use in settings.xml'
         required: false
         default: 'central'
         type: string
-      # Entradas opcionales no utilizadas directamente en este flujo WebLogic pero mantenidas por compatibilidad con el CI original
-      acr:
-        description: 'Azure Container Registry (si aplica para otros flujos).'
+      pom-version-file: # Ruta relativa a workdir
+        description: 'Path to the pom.xml file (relative to workdir)'
+        required: true
+        type: string
+      weblogic_username:
+        description: 'Usuario para las operaciones de despliegue en WebLogic.'
         required: false
         type: string
-      folder:
-        description: 'Carpeta dentro de ACR (si aplica).'
+        default: 'weblogicdeploy'
+      weblogic_home_lib_path:
+        description: 'Ruta al directorio de librerías del servidor WebLogic.'
         required: false
         type: string
-      workload-path:
-        description: 'Ruta del workload (si aplica).'
+        default: '/u01/WLS14.1.1/middleware/wlserver/server/lib/'
+      artifact_dest_dir_remote:
+        description: 'Directorio remoto en el servidor WebLogic para copiar y extraer los artefactos.'
         required: false
         type: string
-      container-app-name:
-        description: 'Nombre del Container App (si aplica).'
-        required: false
-        type: string
+        default: '/u01/WLS14.1.1/middleware/domains/instaladores'
 
     secrets:
-      # Secretos para CI (Artifactory y checkout de acción interna)
-      ARTIFACTORY_READER_USER:
-        required: false
-      ARTIFACTORY_READER_PASSWORD:
-        required: false
-      TOKEN_GITHUB: # Necesario para checkout de acciones internas/privadas
-        required: true
-      ARTIFACTORY_WRITER_USER:
-        required: false
-      ARTIFACTORY_WRITER_PASSWORD:
-        required: false
-      # Secretos para CD (VM de Azure y WebLogic)
-      AZURE_VM_SSH_USER:
-        required: true
-      AZURE_VM_SSH_PRIVATE_KEY:
-        required: true
-      WEBLOGIC_PASSWORD_DESARROLLO:
-        required: true
-      WEBLOGIC_PASSWORD_LABORATORIO:
-        required: true
-      WEBLOGIC_PASSWORD_PRODUCCION:
-        required: true
-      AZURE_VM_IP_DESARROLLO:
-        required: true
-      AZURE_VM_IP_LABORATORIO:
-        required: true
-      AZURE_VM_IP_PRODUCCION:
-        required: true
-      # Considera añadir secretos para TU_LAB_HOST, TU_PROD_HOST si no son IPs fijas y quieres parametrizarlas
-      # WEBLOGIC_HOST_LABORATORIO: required: false
-      # WEBLOGIC_HOST_PRODUCCION: required: false
+      REUSABLE_ARTIFACTORY_READER_USER: {description: 'Artifactory reader username.', required: false}
+      REUSABLE_ARTIFACTORY_READER_PASSWORD: {description: 'Artifactory reader password.', required: false}
+      REUSABLE_TOKEN_GITHUB: {description: 'GitHub token for checking out actions from other private/internal repositories.', required: true}
+      REUSABLE_ARTIFACTORY_WRITER_USER: {description: 'Artifactory writer username.', required: false}
+      REUSABLE_ARTIFACTORY_WRITER_PASSWORD: {description: 'Artifactory writer password.', required: false}
+      REUSABLE_AZURE_VM_SSH_USER: {description: 'SSH username for the Azure VM.', required: true}
+      REUSABLE_AZURE_VM_SSH_PRIVATE_KEY: {description: 'SSH private key for the Azure VM.', required: true}
+      REUSABLE_WEBLOGIC_PASSWORD: {description: 'WebLogic password for the target environment.', required: true}
+      REUSABLE_AZURE_VM_IP: {description: 'IP of the Azure VM for the target environment.', required: true}
 
 jobs:
   build:
-    name: CI - Compilar y Empaquetar Aplicación
+    name: CI - Build and Package Application
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }} # Para GitHub Environments y sus secretos/reglas
-    outputs:
-      zip_name: ${{ steps.set_artifact_names.outputs.final_zip_name }}       # ej: PR-123.zip
-      artifact_name: ${{ steps.set_artifact_names.outputs.final_artifact_name }} # ej: mi-app-1.0.war
-
+    environment: ${{ inputs.environment }}
     steps:
-      - name: Checkout Código Fuente
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ inputs.java-version }}
+          distribution: ${{ inputs.java-distribution }}
+        
+      - name: Create settings file directory
+        run: mkdir -p /home/runner/.m2
+
+      - name: Create Maven settings with Artifactory
+        if: ${{ inputs.use-artifactory }}
+        run: |
+          echo "📝 Creating Maven settings.xml for Artifactory..."
+          ARTIFACTORY_URL="${{ inputs.artifactory-url }}/maven-davi" 
+          echo '<?xml version="1.0" encoding="UTF-8"?> <settings xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 http://maven.apache.org/xsd/settings-1.0.0.xsd" xmlns="http://maven.apache.org/SETTINGS/1.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"> <servers> <server> <username>${{ secrets.REUSABLE_ARTIFACTORY_READER_USER }}</username> <password>${{ secrets.REUSABLE_ARTIFACTORY_READER_PASSWORD }}</password> <id>${{ inputs.maven-repo-id }}</id> </server> <server> <username>${{ secrets.REUSABLE_ARTIFACTORY_READER_USER }}</username> <password>${{ secrets.REUSABLE_ARTIFACTORY_READER_PASSWORD }}</password> <id>snapshots</id> </server> </servers> <profiles> <profile> <id>artifactory</id> <repositories> <repository> <id>${{ inputs.maven-repo-id }}</id> <url>'$ARTIFACTORY_URL'</url> <releases><checksumPolicy>ignore</checksumPolicy></releases> <snapshots><checksumPolicy>ignore</checksumPolicy></snapshots> </repository> <repository> <id>snapshots</id> <url>'$ARTIFACTORY_URL'</url> <releases><checksumPolicy>ignore</checksumPolicy></releases> <snapshots><checksumPolicy>ignore</checksumPolicy></snapshots> </repository> </repositories> <pluginRepositories> <pluginRepository> <id>${{ inputs.maven-repo-id }}</id> <url>'$ARTIFACTORY_URL'</url> <releases><checksumPolicy>ignore</checksumPolicy></releases> <snapshots><checksumPolicy>ignore</checksumPolicy></snapshots> </pluginRepository> <pluginRepository> <id>snapshots</id> <url>'$ARTIFACTORY_URL'</url> <releases><checksumPolicy>ignore</checksumPolicy></releases> <snapshots><checksumPolicy>ignore</checksumPolicy></snapshots> </pluginRepository> </pluginRepositories> </profile> </profiles> <activeProfiles> <activeProfile>artifactory</activeProfile> </activeProfiles> </settings>' > /home/runner/.m2/settings.xml
+          echo "✅ Maven settings.xml created."
+
+      - name: Get version from pom.xml
+        working-directory: ${{ inputs.workdir }}
+        run: |
+          echo "📝 Deriving artifact version from POM: ${{ inputs.pom-version-file }}"
+          POM_FILE=${{ inputs.pom-version-file }}
+          artifactId=$(mvn -f "$POM_FILE" help:evaluate -Dexpression=project.artifactId -q -DforceStdout | awk 'END{print}')
+          version=$(mvn -f "$POM_FILE" help:evaluate -Dexpression=project.version -q -DforceStdout | awk 'END{print}')
+          packaging=$(mvn -f "$POM_FILE" help:evaluate -Dexpression=project.packaging -q -DforceStdout | awk 'END{print}')
+          if [ -z "$artifactId" ] || [ -z "$version" ] || [ -z "$packaging" ]; then
+            echo "❌ ERROR: Could not extract artifactId, version, or packaging from POM."
+            echo "Attempted to analyze POM: $(pwd)/$POM_FILE"
+            exit 1
+          fi
+          filename_val="${artifactId}-${version}.${packaging}"
+          echo "filename=${filename_val}" >> $GITHUB_ENV
+          echo "✅ Derived artifact filename: ${filename_val}"
+
+      - name: Build
+        working-directory: ${{ inputs.workdir }}
+        run: |
+          echo "🚀 Starting build with command: ${{ inputs.build-command }}"
+          ${{ inputs.build-command }}
+          echo "✅ Build completed."
+
+      - name: Checkout Retrive Action
+        if: ${{ inputs.use-artifactory }}
         uses: actions/checkout@v4
         with:
-          path: ${{ inputs.workdir }} # Checkout en el workdir especificado
+          repository: davivienda-colombia/davi-coe-action-jfrog-pipeline
+          ref: 'v1.14.0'
+          token: ${{ secrets.REUSABLE_TOKEN_GITHUB }}
+          path: ./.github/actions/temp-jfrog-action
+        
+      - name: Set version for JFrog
+        if: ${{ inputs.use-artifactory }}
+        env:
+          REPO_GH: ${{ github.event.repository.name }}
+          ENVIRONMENT_INPUT: ${{ inputs.environment }}
+        run: |
+          echo "📝 Setting versions for JFrog..."
+          dest=""
+          case "$ENVIRONMENT_INPUT" in
+            integration) dest="int" ;;
+            laboratory)  dest="lab" ;;
+            production)  dest="prod" ;;
+            *) echo "⚠️ WARNING: Environment '$ENVIRONMENT_INPUT' not recognized for JFrog suffix. Using no suffix.";;
+          esac
+          JFROG_REPO_NAME="${REPO_GH}-${dest}"
+          echo "JFROG_REPOSITORY=${JFROG_REPO_NAME}" >> $GITHUB_ENV
+          NEW_NAME_VAL="PR-${GITHUB_RUN_NUMBER}"
+          echo "NEW_NAME=${NEW_NAME_VAL}" >> $GITHUB_ENV
+          echo "✅ JFrog Repository: ${JFROG_REPO_NAME}, ZIP Base Name (NEW_NAME): ${NEW_NAME_VAL}"
 
-      - name: Configurar Java
+        # descomentarear estas lineas cuando se tenga el flujo completo
+
+        # PR_COMMIT=$(git log --merges --grep="Merge pull request" --pretty=format:"%H" | head -n 1)
+        # PR_NUMBER=$(git log -1 --pretty=format:"%s" $PR_COMMIT | grep -oP '(?<=#)\d+')   
+        # NEW_NAME="PR-$PR_NUMBER"
+
+      - name: Compress artifact
+        working-directory: ${{ inputs.workdir }}
+        run: |
+          echo "📦 Compressing artifact: ${{ inputs.compile_folder }}/target/${{ env.filename }} into ${{ env.NEW_NAME }}.zip"
+          if [ ! -f "${{ inputs.compile_folder }}/target/${{ env.filename }}" ]; then
+            echo "❌ ERROR: Artifact file to compress not found at $(pwd)/${{ inputs.compile_folder }}/target/${{ env.filename }}"
+            ls -la "${{ inputs.compile_folder }}/target/"
+            exit 1
+          fi
+          zip -j "${{ env.NEW_NAME }}.zip" "${{ inputs.compile_folder }}/target/${{ env.filename }}"
+          echo "✅ Compression complete. Verifying ZIP file:"
+          ls -l "${{ env.NEW_NAME }}.zip"
+
+      - name: Upload package to JFrog ${{ inputs.environment}}
+        if: ${{ inputs.environment == 'integration' && inputs.use-artifactory }}
+        uses: ./.github/actions/temp-jfrog-action/retrieve-artifact
+        with:
+          function: 'upload'
+          artifactory-writer-user: ${{ secrets.REUSABLE_ARTIFACTORY_WRITER_USER }}
+          artifactory-writer-password: ${{ secrets.REUSABLE_ARTIFACTORY_WRITER_PASSWORD }}
+          artifact-url: https://davicienda.jfrog.io/artifactory/${{ env.JFROG_REPOSITORY }} 
+          artifact: ${{ inputs.workdir }}/${{ env.NEW_NAME }}.zip 
+        
+      - name: Validate .zip existence before final upload
+        working-directory: ${{ inputs.workdir }}
+        run: |
+          echo "🧐 Validating final ZIP: $(pwd)/${{ env.NEW_NAME }}.zip"
+          ls -la "${{ env.NEW_NAME }}.zip"
+
+      - name: Upload application ZIP for Deploy Job
+        uses: actions/upload-artifact@v4
+        with:
+          name: application-package
+          path: ${{ inputs.workdir }}/${{ env.NEW_NAME }}.zip
+          if-no-files-found: error
+          retention-days: 1 # Artifact is temporary for this workflow run
+        
+  deploy:
+    name: CD - Deploy Application to WebLogic
+    runs-on: ubuntu-latest
+    needs: build
+    environment: ${{ inputs.environment }}
+    env:
+      SSH_HOST_VAR: ${{ secrets.REUSABLE_AZURE_VM_IP }}
+      SSH_USER_VAR: ${{ secrets.REUSABLE_AZURE_VM_SSH_USER }}
+      WEBLOGIC_PASSWORD_VAR: ${{ secrets.REUSABLE_WEBLOGIC_PASSWORD }}
+      WEBLOGIC_ADMIN_URL_VAR: ${{ (inputs.environment == 'integration' && 't3://10.229.165.5:7001') || (inputs.environment == 'laboratory' && 't3://TU_LAB_HOST:7001') || (inputs.environment == 'production' && 't3://TU_PROD_HOST:7001') }}
+      WEBLOGIC_TARGETS_VAR: ${{ (inputs.environment == 'integration' && 'CLUSTER_HWEC-D') || (inputs.environment == 'laboratory' && 'CLUSTER_HWEC-L') || (inputs.environment == 'production' && 'CLUSTER_HWEC-P') }}
+      WEBLOGIC_USERNAME_VAR: ${{ inputs.weblogic_username }}
+      WEBLOGIC_HOME_LIB_PATH_VAR: ${{ inputs.weblogic_home_lib_path }}
+      ARTIFACT_DEST_DIR_REMOTE_VAR: ${{ inputs.artifact_dest_dir_remote }}
+
+    steps:
+      - name: Setup Java (for pom parsing)
         uses: actions/setup-java@v4
         with:
           java-version: ${{ inputs.java-version }}
           distribution: ${{ inputs.java-distribution }}
 
-      - name: Crear Directorio de Settings de Maven
-        run: mkdir -p /home/runner/.m2
-        working-directory: ${{ inputs.workdir }}
-
-      - name: Crear settings.xml para Artifactory
-        if: ${{ inputs.use-artifactory }}
-        working-directory: ${{ inputs.workdir }}
-        run: |
-          echo "Generando archivo settings con credenciales jfrog para ${{ inputs.artifactory-url }}"
-          ARTIFACTORY_URL_MAVEN="${{ inputs.artifactory-url }}/maven-davi" # Ajusta 'maven-davi' si es necesario
-          echo '<?xml version="1.0" encoding="UTF-8"?>
-          <settings
-              xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 http://maven.apache.org/xsd/settings-1.0.0.xsd"
-              xmlns="http://maven.apache.org/SETTINGS/1.0.0"
-              xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-              <servers>
-                  <server>
-                      <username>${{ secrets.ARTIFACTORY_READER_USER }}</username>
-                      <password>${{ secrets.ARTIFACTORY_READER_PASSWORD }}</password>
-                      <id>${{ inputs.maven-repo-id }}</id>
-                  </server>
-                  <server>
-                      <username>${{ secrets.ARTIFACTORY_READER_USER }}</username>
-                      <password>${{ secrets.ARTIFACTORY_READER_PASSWORD }}</password>
-                      <id>snapshots</id> </server>
-              </servers>
-              <profiles>
-                  <profile>
-                      <id>artifactory</id>
-                      <repositories>
-                          <repository>
-                              <id>${{ inputs.maven-repo-id }}</id>
-                              <url>'$ARTIFACTORY_URL_MAVEN'</url>
-                              <releases><checksumPolicy>ignore</checksumPolicy></releases>
-                              <snapshots><enabled>true</enabled><checksumPolicy>ignore</checksumPolicy></snapshots>
-                          </repository>
-                          <repository>
-                              <id>snapshots</id>
-                              <url>'$ARTIFACTORY_URL_MAVEN'</url>
-                              <releases><checksumPolicy>ignore</checksumPolicy></releases>
-                              <snapshots><enabled>true</enabled><checksumPolicy>ignore</checksumPolicy></snapshots>
-                          </repository>
-                      </repositories>
-                      <pluginRepositories>
-                          <pluginRepository>
-                              <id>${{ inputs.maven-repo-id }}</id>
-                              <url>'$ARTIFACTORY_URL_MAVEN'</url>
-                              <releases><checksumPolicy>ignore</checksumPolicy></releases>
-                              <snapshots><enabled>true</enabled><checksumPolicy>ignore</checksumPolicy></snapshots>
-                          </pluginRepository>
-                          <pluginRepository>
-                              <id>snapshots</id>
-                              <url>'$ARTIFACTORY_URL_MAVEN'</url>
-                              <releases><checksumPolicy>ignore</checksumPolicy></releases>
-                              <snapshots><enabled>true</enabled><checksumPolicy>ignore</checksumPolicy></snapshots>
-                          </pluginRepository>
-                      </pluginRepositories>
-                  </profile>
-              </profiles>
-              <activeProfiles>
-                  <activeProfile>artifactory</activeProfile>
-              </activeProfiles>
-          </settings>' > /home/runner/.m2/settings.xml
-          echo "settings.xml creado en /home/runner/.m2/settings.xml"
-
-      - name: Determinar Nombres de Artefacto y ZIP
-        id: set_artifact_names
-        working-directory: ${{ inputs.workdir }}
-        run: |
-          # 1. Obtener versión y nombres del pom.xml
-          POM_FILE_PATH="${{ inputs.pom-version-file }}" # Esta ruta es relativa al checkout root, no a workdir si workdir no es './'
-                                                       # Si pom-version-file es 'modulo/pom.xml' y workdir es './', está bien.
-                                                       # Si workdir es 'mi-proyecto' y pom-version-file es 'modulo/pom.xml', la ruta efectiva es 'mi-proyecto/modulo/pom.xml'
-          
-          # Corrección: pom-version-file debe ser accesible desde la raíz del checkout si workdir se usa para el path de checkout
-          # Si inputs.workdir es donde se hace el checkout, entonces inputs.pom-version-file debe ser la ruta *dentro* de ese workdir.
-          # Ejemplo: workdir = 'app', pom-version-file = 'pom.xml' -> busca en 'app/pom.xml'
-          # Ejemplo: workdir = '.', pom-version-file = 'app/pom.xml' -> busca en './app/pom.xml'
-          
-          # Para simplificar, asumimos que pom-version-file es la ruta desde la raíz del checkout (donde está .github/workflows)
-          # Y que inputs.workdir es donde se debe ejecutar el build y donde está inputs.compile_folder
-          
-          # Ajuste para que POM_FILE_PATH sea relativo a la raíz del checkout, no al working-directory del step.
-          # El checkout se hace en inputs.workdir. Si pom-version-file es 'mi-modulo/pom.xml',
-          # y workdir es '.', entonces se busca en './mi-modulo/pom.xml'.
-          # Si workdir es 'mi-proyecto', y se hace checkout a 'mi-proyecto', y pom-version-file es 'mi-modulo/pom.xml',
-          # entonces se buscaría en 'mi-proyecto/mi-modulo/pom.xml'.
-          # El `grep` se ejecuta en `inputs.workdir`. Así que `inputs.pom-version-file` debe ser la ruta relativa a `inputs.workdir`.
-
-          effective_pom_path="${{ inputs.pom-version-file }}" # Asumimos que inputs.pom-version-file es relativo a inputs.workdir
-
-          echo "Buscando pom en: $(pwd)/${effective_pom_path}"
-          if [ ! -f "${effective_pom_path}" ]; then
-            echo "Error: pom.xml no encontrado en $(pwd)/${effective_pom_path}"
-            exit 1
-          fi
-
-          artifactId=$(grep -oPm1 "(?<=<artifactId>)[^<]+" "${effective_pom_path}" | head -n 1)
-          version=$(grep -oPm1 "(?<=<version>)[^<]+" "${effective_pom_path}" | head -n 1)
-          packaging=$(grep -oPm1 "(?<=<packaging>)[^<]+" "${effective_pom_path}" | head -n 1)
-          artifact_filename_val="${artifactId}-${version}.${packaging}"
-          echo "Nombre de artefacto derivado: ${artifact_filename_val}"
-          echo "final_artifact_name=${artifact_filename_val}" >> $GITHUB_OUTPUT
-          echo "ARTIFACT_FILENAME_ENV=${artifact_filename_val}" >> $GITHUB_ENV
-
-          # 2. Establecer nombre del ZIP (basado en el número de ejecución del workflow)
-          zip_base_name_val="PR-${GITHUB_RUN_NUMBER}" # O usa la lógica de PR_NUMBER si la restauras
-          zip_filename_val="${zip_base_name_val}.zip"
-          echo "Nombre de ZIP generado: ${zip_filename_val}"
-          echo "final_zip_name=${zip_filename_val}" >> $GITHUB_OUTPUT
-          echo "ZIP_FILENAME_ENV=${zip_filename_val}" >> $GITHUB_ENV
-
-          # 3. Establecer nombre del repositorio JFrog (si se usa Artifactory)
-          if [[ "${{ inputs.use-artifactory }}" == "true" ]]; then
-            REPO_NAME=$(echo "${{ github.repository }}" | cut -d'/' -f2) # Obtiene el nombre del repo de 'owner/repo'
-            ENVIRONMENT_NAME="${{ inputs.environment }}"
-            dest_suffix=""
-            case "$ENVIRONMENT_NAME" in
-              integration) dest_suffix="int" ;;
-              laboratory)  dest_suffix="lab" ;;
-              production)  dest_suffix="prod" ;;
-              *) echo "ADVERTENCIA: Ambiente no reconocido para sufijo de JFrog: $ENVIRONMENT_NAME" ;; # No salir, permitir flujo
-            esac
-            JFROG_REPO_VAL="$REPO_NAME-$dest_suffix"
-            echo "JFROG_REPOSITORY_ENV=$JFROG_REPO_VAL" >> $GITHUB_ENV
-            echo "Repositorio JFrog: $JFROG_REPO_VAL"
-          fi
-
-      - name: Construir con Maven
-        working-directory: ${{ inputs.workdir }}
-        run: ${{ inputs.build-command }}
-
-      - name: Comprimir Artefacto
-        working-directory: ${{ inputs.workdir }}
-        run: |
-          # Ruta al artefacto construido, relativa a inputs.workdir.
-          # inputs.compile_folder es la carpeta que contiene 'target'. ej: 'mi-modulo'
-          ARTIFACT_SOURCE_PATH="${{ inputs.compile_folder }}/target/${{ env.ARTIFACT_FILENAME_ENV }}"
-          
-          echo "Intentando comprimir: ${ARTIFACT_SOURCE_PATH}"
-          echo "En el archivo ZIP: ${{ env.ZIP_FILENAME_ENV }}"
-
-          if [ ! -f "${ARTIFACT_SOURCE_PATH}" ]; then
-            echo "Error: Archivo de artefacto no encontrado en $(pwd)/${ARTIFACT_SOURCE_PATH}"
-            echo "Contenido de $(pwd):"; ls -la;
-            echo "Contenido de $(pwd)/${{ inputs.compile_folder }}/target/:"
-            ls -la "${{ inputs.compile_folder }}/target/"
-            exit 1
-          fi
-
-          # zip -j crea el zip en el directorio actual (inputs.workdir) con el archivo pero sin su ruta
-          zip -j "${{ env.ZIP_FILENAME_ENV }}" "${ARTIFACT_SOURCE_PATH}"
-          
-          echo "Artefacto ${ARTIFACT_SOURCE_PATH} comprimido en ${{ env.ZIP_FILENAME_ENV }}"
-          ls -l "${{ env.ZIP_FILENAME_ENV }}"
-
-      - name: Checkout Acción JFrog
-        if: ${{ inputs.use-artifactory && inputs.environment == 'integration' }}
+      - name: Checkout Source Code (for pom parsing)
         uses: actions/checkout@v4
         with:
-          repository: davivienda-colombia/davi-coe-action-jfrog-pipeline
-          ref: 'v1.14.0' # Recomiendo usar un tag específico y probado
-          token: ${{ secrets.TOKEN_GITHUB }}
-          path: ./.github/actions/davi-coe-action-jfrog-pipeline # Checkout en una subcarpeta temporal
+          # If inputs.workdir is not './', you might need to checkout to that path
+          # path: ${{ inputs.workdir }} # And adjust POM_FILE_PATH_IN_CALLER accordingly
+          # For now, assuming pom-version-file is relative to root of checkout
 
-      - name: Subir paquete a JFrog (${{ inputs.environment }})
-        if: ${{ inputs.use-artifactory && inputs.environment == 'integration' }}
-        uses: ./.github/actions/davi-coe-action-jfrog-pipeline/retrieve-artifact
-        with:
-          function: 'upload'
-          artifactory-writer-user: ${{ secrets.ARTIFACTORY_WRITER_USER }}
-          artifactory-writer-password: ${{ secrets.ARTIFACTORY_WRITER_PASSWORD }}
-          artifactory-url: ${{ inputs.artifactory-url }} # El action probablemente añade /${{ env.JFROG_REPOSITORY_ENV }}
-          target-repository: ${{ env.JFROG_REPOSITORY_ENV }} # Si el action lo requiere explícitamente
-          artifact: ${{ inputs.workdir }}/${{ env.ZIP_FILENAME_ENV }} # Ruta completa al ZIP
+      - name: "⚙️ Determine artifact names (re-derivation)"
+        env:
+          POM_FILE_PATH_IN_CALLER: ${{ inputs.pom-version-file }} # Relative to checkout root
+        run: |
+          echo "📝 Re-deriving artifact names for deployment..."
+          NEW_NAME_VAL="PR-${GITHUB_RUN_NUMBER}"
+          echo "ZIP_FILENAME=${NEW_NAME_VAL}.zip" >> $GITHUB_ENV
+          echo "Analizando POM: ${POM_FILE_PATH_IN_CALLER} para obtener nombre de artefacto interno."
+          artifactId=$(mvn -f "${POM_FILE_PATH_IN_CALLER}" help:evaluate -Dexpression=project.artifactId -q -DforceStdout | awk 'END{print}')
+          version=$(mvn -f "${POM_FILE_PATH_IN_CALLER}" help:evaluate -Dexpression=project.version -q -DforceStdout | awk 'END{print}')
+          packaging=$(mvn -f "${POM_FILE_PATH_IN_CALLER}" help:evaluate -Dexpression=project.packaging -q -DforceStdout | awk 'END{print}')
+          if [ -z "$artifactId" ] || [ -z "$version" ] || [ -z "$packaging" ]; then
+            echo "❌ ERROR: Could not extract artifact details from POM '${POM_FILE_PATH_IN_CALLER}' in deploy job."
+            exit 1
+          fi
+          INTERNAL_ARTIFACT_FILENAME_VAL="${artifactId}-${version}.${packaging}"
+          echo "INTERNAL_ARTIFACT_FILENAME=${INTERNAL_ARTIFACT_FILENAME_VAL}" >> $GITHUB_ENV
+          echo "✅ Deploy Job - ZIP Filename: ${NEW_NAME_VAL}.zip"
+          echo "✅ Deploy Job - Internal Artifact Filename: ${INTERNAL_ARTIFACT_FILENAME_VAL}"
 
-      - name: Validar ZIP antes de subirlo como artefacto de GitHub
-        working-directory: ${{ inputs.workdir }}
-        run: ls -la "${{ env.ZIP_FILENAME_ENV }}"
-
-      - name: Subir ZIP de aplicación para el job de despliegue
-        uses: actions/upload-artifact@v4
-        with:
-          name: application-zip-for-deploy # Nombre del artefacto para download
-          path: ${{ inputs.workdir }}/${{ env.ZIP_FILENAME_ENV }} # Ruta al ZIP generado
-
-  deploy:
-    name: CD - Desplegar en WebLogic
-    runs-on: ubuntu-latest
-    needs: build
-    environment: ${{ inputs.environment }} # Para GitHub Environments y sus secretos/reglas
-    env:
-      # Variables de conexión SSH y WebLogic (sensible a mayúsculas/minúsculas)
-      # Asegúrate que los nombres de secretos en GitHub coincidan exactamente
-      SSH_HOST_VAR: ${{ (inputs.environment == 'integration' && secrets.AZURE_VM_IP_DESARROLLO) || (inputs.environment == 'laboratory' && secrets.AZURE_VM_IP_LABORATORIO) || (inputs.environment == 'production' && secrets.AZURE_VM_IP_PRODUCCION) }}
-      SSH_USER_VAR: ${{ secrets.AZURE_VM_SSH_USER }}
-      WEBLOGIC_PASSWORD_VAR: ${{ (inputs.environment == 'integration' && secrets.WEBLOGIC_PASSWORD_DESARROLLO) || (inputs.environment == 'laboratory' && secrets.WEBLOGIC_PASSWORD_LABORATORIO) || (inputs.environment == 'production' && secrets.WEBLOGIC_PASSWORD_PRODUCCION) }}
-      
-      # Reemplaza TU_LAB_HOST y TU_PROD_HOST con los valores correctos o usa secretos/inputs adicionales
-      WEBLOGIC_ADMIN_URL_VAR: ${{ (inputs.environment == 'integration' && 't3://10.229.165.5:7001') || (inputs.environment == 'laboratory' && 't3://TU_LAB_HOST:7001') || (inputs.environment == 'production' && 't3://TU_PROD_HOST:7001') }}
-      WEBLOGIC_TARGETS_VAR: ${{ (inputs.environment == 'integration' && 'CLUSTER_HWEC-D') || (inputs.environment == 'laboratory' && 'CLUSTER_HWEC-L') || (inputs.environment == 'production' && 'CLUSTER_HWEC-P') }}
-      
-      WEBLOGIC_USERNAME_VAR: 'weblogicdeploy' # Puede ser un input/secret si varía
-      WEBLOGIC_HOME_LIB_PATH_VAR: '/u01/WLS14.1.1/middleware/wlserver/server/lib/' # Puede ser un input si varía
-      ARTIFACT_DEST_DIR_REMOTE_VAR: '/u01/WLS14.1.1/middleware/domains/instaladores' # Puede ser un input si varía
-
-      # Nombres obtenidos del job de build
-      ZIP_TO_DEPLOY: ${{ needs.build.outputs.zip_name }}
-      ARTIFACT_FILE_TO_DEPLOY: ${{ needs.build.outputs.artifact_name }}
-      # Nombre de la aplicación para WebLogic Deployer (-name)
-      APPLICATION_NAME_FOR_WEBLOGIC: ${{ needs.build.outputs.artifact_name }} # Generalmente el nombre del archivo .war/.ear
-
-    steps:
-      - name: "📥 Descargar ZIP del artefacto desde el job de build"
+      - name: "📥 Download Artifact ZIP from build job"
         uses: actions/download-artifact@v4
         with:
-          name: application-zip-for-deploy # Debe coincidir con el 'name' en upload-artifact
-          path: ./downloaded-zip-artifact # Descargar a una subcarpeta para claridad
-
-      - name: "🔎 Verificar ZIP descargado"
+          name: application-package
+          path: ./downloaded-artifact
+        
+      - name: "🔎 Verify and Prepare ZIP for SCP"
         run: |
-          echo "Contenido de ./downloaded-zip-artifact:"
-          ls -lR ./downloaded-zip-artifact
-          echo "Archivo ZIP esperado: ${{ env.ZIP_TO_DEPLOY }}"
-          if [ ! -f "./downloaded-zip-artifact/${{ env.ZIP_TO_DEPLOY }}" ]; then
-            echo "Error: El archivo ZIP ${{ env.ZIP_TO_DEPLOY }} no se encontró después de la descarga."
+          echo "📂 Verifying downloaded artifact in ./downloaded-artifact:"
+          ls -lR ./downloaded-artifact
+          if [ -f "./downloaded-artifact/${{ env.ZIP_FILENAME }}" ]; then
+            mv "./downloaded-artifact/${{ env.ZIP_FILENAME }}" "./${{ env.ZIP_FILENAME }}"
+            echo "✅ ZIP '${{ env.ZIP_FILENAME }}' moved and prepared for SCP."
+            ls -l "./${{ env.ZIP_FILENAME }}"
+          else
+            echo "❌ ERROR: Expected ZIP file '${{ env.ZIP_FILENAME }}' not found in downloaded artifact."
             exit 1
           fi
 
-      - name: "🚚 [Paso 1] Copiar archivo ZIP al servidor WebLogic (Azure VM)"
-        uses: appleboy/scp-action@v0.1.7 # Considera actualizar a @master o una versión más reciente si hay problemas
+      - name: "🚚 Copiar archivo ZIP al servidor WebLogic"
+        uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ env.SSH_HOST_VAR }}
           username: ${{ env.SSH_USER_VAR }}
-          key: ${{ secrets.AZURE_VM_SSH_PRIVATE_KEY }}
-          source: "./downloaded-zip-artifact/${{ env.ZIP_TO_DEPLOY }}" # Ruta al ZIP descargado
-          target: "${{ env.ARTIFACT_DEST_DIR_REMOTE_VAR }}/" # Copiar a la carpeta de destino en el servidor
-
-      - name: "📦 [Paso 2] Extraer artefacto en el servidor WebLogic"
-        uses: appleboy/ssh-action@v1.0.3 # Considera actualizar a @master o una versión más reciente
-        with:
-          host: ${{ env.SSH_HOST_VAR }}
-          username: ${{ env.SSH_USER_VAR }}
-          key: ${{ secrets.AZURE_VM_SSH_PRIVATE_KEY }}
-          script: |
-            echo "Extrayendo '${{ env.ARTIFACT_FILE_TO_DEPLOY }}' desde '${{ env.ZIP_TO_DEPLOY }}' en el servidor."
-            echo "Directorio de destino remoto: ${{ env.ARTIFACT_DEST_DIR_REMOTE_VAR }}"
-            # Asegúrate que 'unzip' esté instalado en el servidor RHEL (generalmente lo está)
-            # Podrías añadir: sudo yum install -y unzip (si el usuario SSH tiene permisos sudo y es necesario)
-            
-            # Descomprimir el artefacto específico del ZIP en el directorio de destino
-            unzip -o "${{ env.ARTIFACT_DEST_DIR_REMOTE_VAR }}/${{ env.ZIP_TO_DEPLOY }}" -d "${{ env.ARTIFACT_DEST_DIR_REMOTE_VAR }}" "${{ env.ARTIFACT_FILE_TO_DEPLOY }}"
-            
-            # Verificar que el archivo fue extraído
-            if [ -f "${{ env.ARTIFACT_DEST_DIR_REMOTE_VAR }}/${{ env.ARTIFACT_FILE_TO_DEPLOY }}" ]; then
-              echo "Archivo '${{ env.ARTIFACT_FILE_TO_DEPLOY }}' extraído exitosamente en '${{ env.ARTIFACT_DEST_DIR_REMOTE_VAR }}'."
-              ls -l "${{ env.ARTIFACT_DEST_DIR_REMOTE_VAR }}/${{ env.ARTIFACT_FILE_TO_DEPLOY }}"
-            else
-              echo "Error: No se pudo extraer '${{ env.ARTIFACT_FILE_TO_DEPLOY }}' del ZIP."
-              echo "Contenido de '${{ env.ARTIFACT_DEST_DIR_REMOTE_VAR }}/${{ env.ZIP_TO_DEPLOY }}' (comando unzip -l):"
-              unzip -l "${{ env.ARTIFACT_DEST_DIR_REMOTE_VAR }}/${{ env.ZIP_TO_DEPLOY }}" || echo "No se pudo listar el contenido del ZIP."
-              exit 1
-            fi
-
-      - name: "🧹 [Paso 3] Desinstalar versión anterior en WebLogic (Undeploy)"
+          key: ${{ secrets.REUSABLE_AZURE_VM_SSH_PRIVATE_KEY }}
+          source: "./${{ env.ZIP_FILENAME }}"
+          target: "${{ env.ARTIFACT_DEST_DIR_REMOTE_VAR }}/"
+          debug: true # habilitado para if troubleshooting en scp-action 
+        
+      - name: "📦 Extraer artefacto en el servidor WebLogic"
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ env.SSH_HOST_VAR }}
           username: ${{ env.SSH_USER_VAR }}
-          key: ${{ secrets.AZURE_VM_SSH_PRIVATE_KEY }}
+          key: ${{ secrets.REUSABLE_AZURE_VM_SSH_PRIVATE_KEY }}
           script: |
-            echo "Intentando undeploy de '${{ env.APPLICATION_NAME_FOR_WEBLOGIC }}'"
+            set -e # Exit immediately if a command exits with a non-zero status.
+            echo "🚀 Attempting to extract '${{ env.INTERNAL_ARTIFACT_FILENAME }}' from '${{ env.ZIP_FILENAME }}' on server."
+            REMOTE_ZIP_PATH="${{ env.ARTIFACT_DEST_DIR_REMOTE_VAR }}/${{ env.ZIP_FILENAME }}"
+            REMOTE_ARTIFACT_PATH="${{ env.ARTIFACT_DEST_DIR_REMOTE_VAR }}/${{ env.INTERNAL_ARTIFACT_FILENAME }}"
+            DEST_DIR="${{ env.ARTIFACT_DEST_DIR_REMOTE_VAR }}"
+
+            echo "Verifying remote ZIP file: $REMOTE_ZIP_PATH"
+            if [ ! -f "$REMOTE_ZIP_PATH" ]; then
+              echo "❌ ERROR: Remote ZIP file not found at $REMOTE_ZIP_PATH"
+              ls -la "$DEST_DIR"
+              exit 1
+            fi
+            
+            echo "Unzipping $REMOTE_ZIP_PATH to $DEST_DIR, extracting ${{ env.INTERNAL_ARTIFACT_FILENAME }}"
+            unzip -o "$REMOTE_ZIP_PATH" -d "$DEST_DIR" "${{ env.INTERNAL_ARTIFACT_FILENAME }}"
+            
+            echo "Verifying extracted artifact: $REMOTE_ARTIFACT_PATH"
+            if [ -f "$REMOTE_ARTIFACT_PATH" ]; then
+              echo "✅ File '${{ env.INTERNAL_ARTIFACT_FILENAME }}' extracted successfully to $DEST_DIR."
+              ls -l "$REMOTE_ARTIFACT_PATH"
+            else
+              echo "❌ ERROR: Failed to extract '${{ env.INTERNAL_ARTIFACT_FILENAME }}'."
+              echo "Listing contents of ZIP file '$REMOTE_ZIP_PATH' on server:"
+              unzip -l "$REMOTE_ZIP_PATH" || echo "Failed to list ZIP contents."
+              echo "Listing contents of destination directory '$DEST_DIR' on server:"
+              ls -la "$DEST_DIR"
+              exit 1
+            fi
+
+      - name: "🧹 Desinstalar versión anterior en WebLogic (Undeploy)"
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ env.SSH_HOST_VAR }}
+          username: ${{ env.SSH_USER_VAR }}
+          key: ${{ secrets.REUSABLE_AZURE_VM_SSH_PRIVATE_KEY }}
+          script: |
+            echo "🚀 Attempting to undeploy application: '${{ env.INTERNAL_ARTIFACT_FILENAME }}'"
             java -cp "${{ env.WEBLOGIC_HOME_LIB_PATH_VAR }}/weblogic.jar" weblogic.Deployer \
               -adminurl "${{ env.WEBLOGIC_ADMIN_URL_VAR }}" \
               -username "${{ env.WEBLOGIC_USERNAME_VAR }}" \
               -password '${{ env.WEBLOGIC_PASSWORD_VAR }}' \
               -undeploy \
-              -name "${{ env.APPLICATION_NAME_FOR_WEBLOGIC }}" \
+              -name "${{ env.INTERNAL_ARTIFACT_FILENAME }}" \
               -targets "${{ env.WEBLOGIC_TARGETS_VAR }}" \
-              -verbose || echo "Undeploy falló o la aplicación no existía. Continuando..."
+              -verbose || echo "⚠️ Undeploy failed or application did not exist. Continuing..."
 
-      - name: "🚀 [Paso 4] Desplegar nuevo artefacto en WebLogic"
+      - name: "🚀 Desplegar nuevo artefacto en WebLogic"
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ env.SSH_HOST_VAR }}
           username: ${{ env.SSH_USER_VAR }}
-          key: ${{ secrets.AZURE_VM_SSH_PRIVATE_KEY }}
+          key: ${{ secrets.REUSABLE_AZURE_VM_SSH_PRIVATE_KEY }}
           script: |
-            echo "Realizando deploy de '${{ env.APPLICATION_NAME_FOR_WEBLOGIC }}'"
-            echo "Fuente del artefacto en servidor: ${{ env.ARTIFACT_DEST_DIR_REMOTE_VAR }}/${{ env.ARTIFACT_FILE_TO_DEPLOY }}"
+            REMOTE_ARTIFACT_PATH="${{ env.ARTIFACT_DEST_DIR_REMOTE_VAR }}/${{ env.INTERNAL_ARTIFACT_FILENAME }}"
+            echo "🚀 Attempting to deploy application: '${{ env.INTERNAL_ARTIFACT_FILENAME }}' from path '$REMOTE_ARTIFACT_PATH'"
             java -cp "${{ env.WEBLOGIC_HOME_LIB_PATH_VAR }}/weblogic.jar" weblogic.Deployer \
               -adminurl "${{ env.WEBLOGIC_ADMIN_URL_VAR }}" \
               -username "${{ env.WEBLOGIC_USERNAME_VAR }}" \
               -password '${{ env.WEBLOGIC_PASSWORD_VAR }}' \
               -deploy \
-              -name "${{ env.APPLICATION_NAME_FOR_WEBLOGIC }}" \
-              -source "${{ env.ARTIFACT_DEST_DIR_REMOTE_VAR }}/${{ env.ARTIFACT_FILE_TO_DEPLOY }}" \
+              -name "${{ env.INTERNAL_ARTIFACT_FILENAME }}" \
+              -source "$REMOTE_ARTIFACT_PATH" \
               -targets "${{ env.WEBLOGIC_TARGETS_VAR }}" \
               -upload \
-              -verbose # Añadido para más detalle en caso de error
+              -verbose
+            echo "✅ Deployment command executed."
 
-      # - name: "🔄 [Paso 5] (Opcional) Reiniciar manejadores y limpiar cache"
+      # - name: "🔄 [Paso Opcional] Reiniciar manejadores y/o limpiar caché"
+      #   if: false 
       #   uses: appleboy/ssh-action@v1.0.3
       #   with:
       #     host: ${{ env.SSH_HOST_VAR }}
       #     username: ${{ env.SSH_USER_VAR }}
-      #     key: ${{ secrets.AZURE_VM_SSH_PRIVATE_KEY }}
+      #     key: ${{ secrets.REUSABLE_AZURE_VM_SSH_PRIVATE_KEY }}
       #     script: |
-      #       # Aquí irían los comandos para reiniciar servicios específicos o limpiar cachés en el servidor WebLogic
-      #       echo "Ejecutando reinicios/limpieza de caché (si es necesario)..."
+      #       echo "Executing optional post-deployment scripts..."
+      #       # ... Tus comandos aquí ...
+      #       echo "Optional post-deployment scripts finished."
