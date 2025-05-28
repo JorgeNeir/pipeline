@@ -1,51 +1,51 @@
-name: Pipeline CI/CD Principal para ExpertoContable
+name: Deploy Experto to WebLogic - Integration 🚀
 
 on:
   push:
     branches:
-      - integration # Ajusta según tu rama principal
+      - integration 
+  workflow_dispatch: 
+
+permissions:
+  id-token: write 
+  contents: read  
 
 jobs:
-  #============================================================================
-  # JOB 1: EJECUTAR EL PIPELINE DE CI (COMPILACIÓN Y EMPAQUETADO)
-  #============================================================================
-  call_ci_build:
-    name: "🛠️ CI - Compilar y Empaquetar Artefacto"
-    uses: ./.github/workflows/deploy-container-app.yml
+  build_and_deploy_integration:
+    name: Build & Deploy Experto to WebLogic (Integration)
+    # Confirmar la ruta del reusable
+    uses: davivienda-colombia/davi-coe-azure-common-reusable-pipeline/.github/workflows/CI_CD_Java_Application_Deployment_on_Azure_VM_WebLogic.yml@feauture/acla
+    
     with:
-      workdir: './'
-      environment: integration
-      build-command: 'mvn clean package -DskipTests'
-      java-version: '11'
-      compile_folder: '.'
-      artifactory-url: 'https://davicienda.jfrog.io/artifactory'
-      use-artifactory: true
-      maven-repo-id: 'central'
-      pom-version-file: 'pom.xml'
-    secrets:
-      ARTIFACTORY_READER_USER: ${{ secrets.ARTIFACTORY_READER_USER_CI }}
-      ARTIFACTORY_READER_PASSWORD: ${{ secrets.ARTIFACTORY_READER_PASSWORD_CI }}
-      ARTIFACTORY_WRITER_USER: ${{ secrets.ARTIFACTORY_WRITER_USER_CI }}
-      ARTIFACTORY_WRITER_PASSWORD: ${{ secrets.ARTIFACTORY_WRITER_PASSWORD_CI }}
-      TOKEN_GITHUB: ${{ secrets.GH_TOKEN_FOR_CI_ACTION_CHECKOUT }}
+      environment: integration # 
 
-  #============================================================================
-  # JOB 2: LLAMAR AL PIPELINE REUTILIZABLE DE CD (EXTRACCIÓN Y DESPLIEGUE)
-  #============================================================================
-  call_cd_reusable:
-    name: "🚀 CD - Desplegar en WebLogic"
-    needs: call_ci_build
-    uses: ./.github/workflows/cd-local-zip-to-weblogic.yml
-    with:
-      zip_artifact_name: ${{ needs.call_ci_build.outputs.zip_name }}
-      artifact_name: ${{ needs.call_ci_build.outputs.artifact_name }}
-      environment: integration # Ajusta si necesitas despliegue a otro entorno
+      # Inputs del CI
+      workdir: './' 
+      build-command: "cd experto-ejb && mvn clean compile package install && cd .. && cd experto-web && mvn clean compile package"
+      java-version: '17'
+      java-distribution: 'corretto'
+      pom-version-file: ./experto-web/pom.xml 
+      compile_folder: experto-web 
+      
+      use-artifactory: true
+      artifactory-url: "https://davicienda.jfrog.io/artifactory"
+      maven-repo-id: 'central'
+
+      # Inputs para configuración de WebLogic (sobrescribiendo defaults si es necesario para integración)
+      weblogic_username: 'weblogicdeploy' #default 'weblogicdeploy'
+      weblogic_home_lib_path: '/u01/WLS14.1.1/middleware/wlserver/server/lib/' #ruta específica para integración
+      artifact_dest_dir_remote: '/u01/WLS14.1.1/middleware/domains/instaladores_int/' #ruta específica para integración
+
     secrets:
-      AZURE_VM_SSH_USER: ${{ secrets.AZURE_VM_SSH_USER_CD }}
-      AZURE_VM_SSH_PRIVATE_KEY: ${{ secrets.AZURE_VM_SSH_PRIVATE_KEY_CD }}
-      WEBLOGIC_PASSWORD_DESARROLLO: ${{ secrets.WEBLOGIC_PASSWORD_DESARROLLO }}
-      WEBLOGIC_PASSWORD_LABORATORIO: ${{ secrets.WEBLOGIC_PASSWORD_LABORATORIO }}
-      WEBLOGIC_PASSWORD_PRODUCCION: ${{ secrets.WEBLOGIC_PASSWORD_PRODUCCION }}
-      AZURE_VM_IP_DESARROLLO: ${{ secrets.AZURE_VM_IP_DESARROLLO }}
-      AZURE_VM_IP_LABORATORIO: ${{ secrets.AZURE_VM_IP_LABORATORIO }}
-      AZURE_VM_IP_PRODUCCION: ${{ secrets.AZURE_VM_IP_PRODUCCION }}
+      # Secretos para CI
+      REUSABLE_ARTIFACTORY_READER_USER: ${{ secrets.EXPERTO_ARTIFACTORY_READER_USER }}
+      REUSABLE_ARTIFACTORY_READER_PASSWORD: ${{ secrets.EXPERTO_ARTIFACTORY_READER_PASSWORD }}
+      REUSABLE_TOKEN_GITHUB: ${{ secrets.EXPERTO_PAT_FOR_ACTIONS_CHECKOUT }} # PAT si la acción de JFrog es privada/interna
+      REUSABLE_ARTIFACTORY_WRITER_USER: ${{ secrets.EXPERTO_ARTIFACTORY_WRITER_USER }}
+      REUSABLE_ARTIFACTORY_WRITER_PASSWORD: ${{ secrets.EXPERTO_ARTIFACTORY_WRITER_PASSWORD }}
+
+      # Secretos para CD (específicos para el ambiente de INTEGRACIÓN)
+      REUSABLE_AZURE_VM_SSH_USER: ${{ secrets.EXPERTO_AZURE_VM_SSH_USER_INTEGRATION }}
+      REUSABLE_AZURE_VM_SSH_PRIVATE_KEY: ${{ secrets.EXPERTO_AZURE_VM_SSH_PRIVATE_KEY_INTEGRATION }}
+      REUSABLE_WEBLOGIC_PASSWORD: ${{ secrets.EXPERTO_WEBLOGIC_PASSWORD_INTEGRATION }} # 
+      REUSABLE_AZURE_VM_IP: ${{ secrets.EXPERTO_AZURE_VM_IP_INTEGRATION }} #
